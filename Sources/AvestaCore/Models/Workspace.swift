@@ -19,7 +19,8 @@ public final class Workspace: Identifiable {
         repos: [WorktreeRef] = [],
         tabs: [any WorkspaceTab] = [],
         activeTabID: UUID? = nil,
-        board: BoardStore? = nil
+        board: BoardStore? = nil,
+        createsDefaultTab: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -29,7 +30,7 @@ public final class Workspace: Identifiable {
         self.activeTabID = activeTabID
         self.board = board ?? BoardStore()
 
-        if tabs.isEmpty {
+        if tabs.isEmpty, createsDefaultTab {
             let terminal = TerminalTabModel(workingDirectory: path)
             self.tabs = [terminal]
             self.activeTabID = terminal.id

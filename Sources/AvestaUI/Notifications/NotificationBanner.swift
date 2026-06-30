@@ -1,11 +1,11 @@
-import AvestaNotifications
+import AvestaCore
 import SwiftUI
 
 struct NotificationBanner: View {
-    @Environment(NotificationService.self) private var service
+    @Environment(AppState.self) private var appState
 
     var body: some View {
-        if let banner = service.inAppBanners.first {
+        if let banner = appState.notificationBanners.first {
             VStack(alignment: .leading, spacing: 4) {
                 Text(banner.title)
                     .font(.headline)

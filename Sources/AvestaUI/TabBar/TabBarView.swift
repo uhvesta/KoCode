@@ -2,6 +2,7 @@ import AvestaCore
 import SwiftUI
 
 struct TabBarView: View {
+    @Environment(AppState.self) private var appState
     let workspace: Workspace
 
     var body: some View {
@@ -10,8 +11,11 @@ struct TabBarView: View {
                 TabBarItem(
                     tab: tab,
                     isActive: workspace.activeTabID == tab.id,
-                    select: { workspace.activeTabID = tab.id },
-                    close: { workspace.closeTab(id: tab.id) }
+                    badgeCount: appState.notificationBadges[tab.id, default: 0],
+                    select: {
+                        appState.selectTab(at: workspace.tabs.firstIndex(where: { $0.id == tab.id }) ?? 0)
+                    },
+                    close: { appState.closeTab(id: tab.id) }
                 )
             }
 

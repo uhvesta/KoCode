@@ -2,6 +2,7 @@ import AvestaCore
 import SwiftUI
 
 struct WorkspaceRow: View {
+    @Environment(AppState.self) private var appState
     let workspace: Workspace
 
     var body: some View {
@@ -16,6 +17,15 @@ struct WorkspaceRow: View {
             }
         } icon: {
             Image(systemName: "folder")
+        }
+        .contextMenu {
+            Button(role: .destructive) {
+                Task {
+                    await appState.deleteWorkspace(id: workspace.id)
+                }
+            } label: {
+                Label("Delete Workspace", systemImage: "trash")
+            }
         }
     }
 }

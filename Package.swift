@@ -19,16 +19,21 @@ let package = Package(
             name: "AvestaCode",
             dependencies: ["AvestaUI", "AvestaNotifications"],
             path: "App",
-            exclude: ["Info.plist"]
+            exclude: ["Info.plist", "Assets.xcassets"]
         ),
         .target(name: "AvestaCore"),
+        .binaryTarget(name: "GhosttyKit", path: "GhosttyKit.xcframework"),
         .target(
             name: "AvestaTerminal",
-            dependencies: ["AvestaCore"]
+            dependencies: ["AvestaCore", "GhosttyKit"],
+            linkerSettings: [
+                .linkedFramework("Carbon"),
+                .linkedLibrary("c++")
+            ]
         ),
         .target(
             name: "AvestaUI",
-            dependencies: ["AvestaCore", "AvestaTerminal", "AvestaNotifications"]
+            dependencies: ["AvestaCore", "AvestaTerminal"]
         ),
         .target(
             name: "AvestaNotifications",
@@ -37,6 +42,18 @@ let package = Package(
         .testTarget(
             name: "AvestaCoreTests",
             dependencies: ["AvestaCore"]
+        ),
+        .testTarget(
+            name: "AvestaNotificationsTests",
+            dependencies: ["AvestaNotifications"]
+        ),
+        .testTarget(
+            name: "AvestaUITests",
+            dependencies: ["AvestaUI", "AvestaCore"]
+        ),
+        .testTarget(
+            name: "AvestaTerminalTests",
+            dependencies: ["AvestaTerminal"]
         )
     ]
 )

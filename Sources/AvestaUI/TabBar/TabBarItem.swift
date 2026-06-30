@@ -4,6 +4,7 @@ import SwiftUI
 struct TabBarItem: View {
     let tab: any WorkspaceTab
     let isActive: Bool
+    let badgeCount: Int
     let select: () -> Void
     let close: () -> Void
 
@@ -13,6 +14,8 @@ struct TabBarItem: View {
                 Image(systemName: tab.kind == .terminal ? "terminal" : "text.page")
                 Text(tab.title)
                     .lineLimit(1)
+
+                NotificationBadge(count: badgeCount)
 
                 if tab.isClosable {
                     Button(action: close) {

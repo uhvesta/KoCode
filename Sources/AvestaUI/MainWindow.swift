@@ -1,19 +1,24 @@
 import AvestaCore
-import AvestaNotifications
 import SwiftUI
 
 public struct MainWindow: View {
     @Environment(AppState.self) private var appState
-    @Environment(NotificationService.self) private var notificationService
     @State private var showingNewWorkspace = false
+    @State private var showingAddRepository = false
+    private let onTerminalOutput: (UUID, String) -> Void
 
-    public init() {}
+    public init(onTerminalOutput: @escaping (UUID, String) -> Void = { _, _ in }) {
+        self.onTerminalOutput = onTerminalOutput
+    }
 
     public var body: some View {
         @Bindable var appState = appState
 
         NavigationSplitView {
-            WorkspaceSidebar(showingNewWorkspace: $showingNewWorkspace)
+            WorkspaceSidebar(
+                showingNewWorkspace: $showingNewWorkspace,
+                showingAddRepository: $showingAddRepository
+            )
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260)
         } detail: {
             ZStack(alignment: .trailing) {
@@ -22,7 +27,7 @@ public struct MainWindow: View {
                         TabBarView(workspace: workspace)
                         Divider()
                         if let tab = workspace.activeTab {
-                            TabContentRouter(tab: tab)
+                            TabContentRouter(tab: tab, onTerminalOutput: onTerminalOutput)
                         } else {
                             ContentUnavailableView("No Tab", systemImage: "rectangle.on.rectangle.slash")
                         }
@@ -46,10 +51,8 @@ public struct MainWindow: View {
         .sheet(isPresented: $showingNewWorkspace) {
             NewWorkspaceSheet()
         }
-        .onAppear {
-            if appState.workspaces.isEmpty {
-                appState.createWorkspace(name: "Default")
-            }
+        .sheet(isPresented: $showingAddRepository) {
+            AddRepositorySheet()
         }
     }
 }

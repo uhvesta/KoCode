@@ -45,7 +45,7 @@ public actor GitService {
     }
 
     public func diff(repoPath: URL, spec: String) async throws -> [FileDiff] {
-        let output = try await run(["git", "-C", repoPath.path, "diff", "--find-renames", spec], cwd: nil)
+        let output = try await run(["git", "-C", repoPath.path, "diff", "--no-ext-diff", "--find-renames", spec], cwd: nil)
         return try GitDiffParser().parse(output)
     }
 

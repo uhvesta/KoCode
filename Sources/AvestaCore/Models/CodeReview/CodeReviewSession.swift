@@ -108,7 +108,7 @@ public final class CodeReviewSession {
     }()
 }
 
-public struct ReviewComment: Identifiable, Hashable, Sendable {
+public struct ReviewComment: Identifiable, Codable, Hashable, Sendable {
     public let id: UUID
     public let fileID: UUID
     public let startLine: Int

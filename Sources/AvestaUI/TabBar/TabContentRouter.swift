@@ -3,43 +3,30 @@ import AvestaTerminal
 import SwiftUI
 
 struct TabContentRouter: View {
+    @Environment(AppState.self) private var appState
     let tab: any WorkspaceTab
+    var onTerminalOutput: (UUID, String) -> Void = { _, _ in }
 
     var body: some View {
         switch tab.kind {
         case .terminal:
             if let terminal = tab as? TerminalTabModel {
-                TerminalSurfaceView(workingDirectory: terminal.workingDirectory, tabModel: terminal)
-                    .overlay(alignment: .topLeading) {
-                        TerminalPlaceholderOverlay(tab: terminal)
+                TerminalSurfaceView(
+                    workingDirectory: terminal.workingDirectory,
+                    tabModel: terminal,
+                    onOutput: { output in
+                        onTerminalOutput(terminal.id, output)
                     }
+                )
+            } else {
+                ContentUnavailableView("Unsupported Terminal Tab", systemImage: "terminal")
             }
         case .codeReview:
             if let codeReview = tab as? CodeReviewTabModel {
                 CodeReviewView(model: codeReview)
+            } else {
+                ContentUnavailableView("Unsupported Code Review Tab", systemImage: "text.page")
             }
         }
-    }
-}
-
-private struct TerminalPlaceholderOverlay: View {
-    let tab: TerminalTabModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Terminal")
-                .font(.headline)
-            Text(tab.workingDirectory.path)
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-            if let pendingPaste = tab.pendingPaste {
-                Text(pendingPaste)
-                    .font(.caption.monospaced())
-                    .padding(8)
-                    .background(.thinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-            }
-        }
-        .padding()
     }
 }

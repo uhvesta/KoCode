@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SideBySideDiffView: View {
     let session: CodeReviewSession
+    var onSelectLine: (FileDiff, DiffLine) -> Void = { _, _ in }
 
     var body: some View {
         if let file = session.activeFile {
@@ -23,13 +24,15 @@ struct SideBySideDiffView: View {
                             HStack(alignment: .top, spacing: 0) {
                                 DiffPane(lines: hunk.lines, side: .old)
                                 Divider()
-                                DiffPane(lines: hunk.lines, side: .new, session: session, file: file)
+                                DiffPane(lines: hunk.lines, side: .new, session: session, file: file, onSelectLine: onSelectLine)
                             }
                         }
                     }
                 }
                 .padding(.vertical)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
             ContentUnavailableView("No File Selected", systemImage: "doc.text")
         }
@@ -41,6 +44,7 @@ private struct DiffPane: View {
     let side: DiffSide
     var session: CodeReviewSession?
     var file: FileDiff?
+    var onSelectLine: (FileDiff, DiffLine) -> Void = { _, _ in }
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 0) {
@@ -49,7 +53,9 @@ private struct DiffPane: View {
                     .contentShape(Rectangle())
                     .onTapGesture {
                         guard side == .new, let session, let file, let lineNumber = line.newLineNumber else { return }
-                        session.addComment(fileID: file.id, line: lineNumber, highlightedText: line.content, text: "")
+                        _ = session
+                        _ = lineNumber
+                        onSelectLine(file, line)
                     }
             }
         }

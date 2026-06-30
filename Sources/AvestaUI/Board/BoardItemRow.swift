@@ -3,6 +3,7 @@ import SwiftUI
 
 struct BoardItemRow: View {
     let item: BoardItem
+    let paste: () -> Void
     @State private var isExpanded = false
 
     var body: some View {
@@ -20,6 +21,12 @@ struct BoardItemRow: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Copy")
+
+                Button(action: paste) {
+                    Image(systemName: "terminal")
+                }
+                .buttonStyle(.borderless)
+                .help("Paste to Terminal")
             }
 
             Text(item.content)

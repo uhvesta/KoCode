@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>AvestaCode Terminal E2E Harness</title>
+  <style>
+    body { font: 14px -apple-system, BlinkMacSystemFont, sans-serif; background: #101214; color: #f5f5f5; padding: 24px; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .status { font-size: 18px; font-weight: 700; }
+    .pass { color: #5ee38a; }
+    .fail { color: #ff6b6b; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 16px; }
+    figure { margin: 0; padding: 12px; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; background: rgba(255,255,255,.04); }
+    figcaption { margin-bottom: 8px; color: rgba(255,255,255,.72); }
+    img { width: 100%; border-radius: 6px; border: 1px solid rgba(255,255,255,.12); }
+  </style>
+</head>
+<body>
+  <div class="status pass">PASS</div>
+  <p>Terminal accepted typed input and executed the marker command.</p>
+  <pre>token: AVESTA_E2E_de37a00259
+marker: /tmp/avestacode_terminal_AVESTA_E2E_de37a00259.txt
+bundle: /Users/avestabarzegar/agentmax/avestacode/.build/release/AvestaCode.app</pre>
+  <div class="grid">
+    <figure><figcaption>terminal-before.png</figcaption><img src="terminal-before.png" /></figure>
+    <figure><figcaption>terminal-after-type.png</figcaption><img src="terminal-after-type.png" /></figure>
+    <figure><figcaption>terminal-after-enter.png</figcaption><img src="terminal-after-enter.png" /></figure>
+  </div>
+</body>
+</html>

@@ -21,7 +21,7 @@ public final class BoardStore {
     }
 }
 
-public struct BoardItem: Identifiable, Hashable, Sendable {
+public struct BoardItem: Identifiable, Codable, Hashable, Sendable {
     public let id: UUID
     public let content: String
     public let source: String

@@ -1,22 +1,24 @@
 import AvestaCore
 import SwiftUI
 
-struct NewWorkspaceSheet: View {
+struct AddRepositorySheet: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
-    @State private var name = ""
     @State private var selectedCachedRepoID: UUID?
     @State private var remoteURL = ""
     @State private var branch = "main"
-    @State private var isCreating = false
+    @State private var isAdding = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("New Workspace")
+            Text("Add Repository")
                 .font(.title2.weight(.semibold))
 
-            TextField("Name", text: $name)
-                .textFieldStyle(.roundedBorder)
+            if let workspace = appState.activeWorkspace {
+                Text("Adds a worktree to \(workspace.name). Paste a Git URL, or reuse an existing local clone if one is listed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             TextField("Repository URL", text: $remoteURL)
                 .textFieldStyle(.roundedBorder)
@@ -28,6 +30,12 @@ struct NewWorkspaceSheet: View {
                     ForEach(appState.cachedRepos) { repo in
                         Text("\(repo.name)  \(repo.remoteURL)").tag(UUID?.some(repo.id))
                     }
+                }
+
+                if selectedCachedRepoID != nil {
+                    Text("This skips cloning and creates another worktree from the existing bare clone.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -45,31 +53,20 @@ struct NewWorkspaceSheet: View {
                 Button("Cancel") {
                     dismiss()
                 }
-                Button("Create") {
-                    isCreating = true
-                    Task {
-                        await appState.createWorkspace(
-                            name: sanitizedName,
-                            cachedRepo: selectedCachedRepo,
-                            remoteURL: remoteURL,
-                            branch: sanitizedBranch
-                        )
-                        isCreating = false
-                        if appState.lastErrorMessage == nil {
-                            dismiss()
-                        }
-                    }
+
+                Button("Add") {
+                    addRepository()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(sanitizedName.isEmpty || isCreating)
+                .disabled(isAddDisabled)
             }
         }
         .padding(20)
-        .frame(width: 420)
+        .frame(width: 440)
     }
 
-    private var sanitizedName: String {
-        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    private var isAddDisabled: Bool {
+        isAdding || appState.activeWorkspace == nil || (selectedCachedRepo == nil && remoteURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     private var sanitizedBranch: String {
@@ -80,5 +77,22 @@ struct NewWorkspaceSheet: View {
     private var selectedCachedRepo: CachedRepo? {
         guard let selectedCachedRepoID else { return nil }
         return appState.cachedRepos.first { $0.id == selectedCachedRepoID }
+    }
+
+    private func addRepository() {
+        guard let workspaceID = appState.activeWorkspaceID ?? appState.activeWorkspace?.id else { return }
+        isAdding = true
+        Task {
+            await appState.addRepository(
+                to: workspaceID,
+                cachedRepo: selectedCachedRepo,
+                remoteURL: remoteURL,
+                branch: sanitizedBranch
+            )
+            isAdding = false
+            if appState.lastErrorMessage == nil {
+                dismiss()
+            }
+        }
     }
 }
