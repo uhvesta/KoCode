@@ -4,6 +4,7 @@ import SwiftUI
 struct DiffLineView: View {
     let line: DiffLine
     let side: DiffSide
+    var filePath: String?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -13,7 +14,7 @@ struct DiffLineView: View {
                 .frame(width: 52, alignment: .trailing)
                 .padding(.trailing, 8)
 
-            Text(line.content.isEmpty ? " " : line.content)
+            Text(displayContent)
                 .font(.system(.body, design: .monospaced))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -21,6 +22,18 @@ struct DiffLineView: View {
         .padding(.vertical, 2)
         .padding(.trailing, 12)
         .background(background)
+    }
+
+    private var displayContent: AttributedString {
+        guard let filePath else {
+            return AttributedString(line.content.isEmpty ? " " : line.content)
+        }
+
+        let highlighted = SwiftSyntaxHighlighter
+            .highlightedLines(for: line.content, path: filePath)
+            .first?
+            .content
+        return line.content.isEmpty ? AttributedString(" ") : highlighted ?? AttributedString(line.content)
     }
 
     private var lineNumber: String {

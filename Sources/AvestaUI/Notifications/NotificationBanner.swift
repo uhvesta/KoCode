@@ -1,11 +1,12 @@
 import AvestaCore
+import ComposableArchitecture
 import SwiftUI
 
 struct NotificationBanner: View {
-    @Environment(AppState.self) private var appState
+    let store: StoreOf<AppFeature>
 
     var body: some View {
-        if let banner = appState.notificationBanners.first {
+        if let banner = store.notificationBanners.first {
             VStack(alignment: .leading, spacing: 4) {
                 Text(banner.title)
                     .font(.headline)

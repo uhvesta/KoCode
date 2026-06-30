@@ -2,11 +2,11 @@ import AvestaCore
 import SwiftUI
 
 struct ReviewSummaryView: View {
-    let session: CodeReviewSession
+    let markdown: String
 
     var body: some View {
         ScrollView {
-            Text(session.toMarkdown())
+            Text(markdown)
                 .font(.system(.body, design: .monospaced))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)

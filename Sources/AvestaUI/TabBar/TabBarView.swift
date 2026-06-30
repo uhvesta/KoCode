@@ -1,9 +1,10 @@
 import AvestaCore
+import ComposableArchitecture
 import SwiftUI
 
 struct TabBarView: View {
-    @Environment(AppState.self) private var appState
-    let workspace: Workspace
+    let store: StoreOf<AppFeature>
+    let workspace: AppFeature.WorkspaceState
 
     var body: some View {
         HStack(spacing: 0) {
@@ -11,15 +12,15 @@ struct TabBarView: View {
                 TabBarItem(
                     tab: tab,
                     isActive: workspace.activeTabID == tab.id,
-                    badgeCount: appState.notificationBadges[tab.id, default: 0],
+                    badgeCount: store.notificationBadges[tab.id, default: 0],
                     select: {
-                        appState.selectTab(at: workspace.tabs.firstIndex(where: { $0.id == tab.id }) ?? 0)
+                        store.send(.selectTab(index: workspace.tabs.firstIndex(where: { $0.id == tab.id }) ?? 0))
                     },
-                    close: { appState.closeTab(id: tab.id) }
+                    close: { store.send(.closeTab(tab.id)) }
                 )
             }
 
-            NewTabMenu(workspace: workspace)
+            NewTabMenu(store: store)
                 .padding(.horizontal, 8)
 
             Spacer(minLength: 0)

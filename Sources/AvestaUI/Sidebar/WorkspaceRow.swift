@@ -1,9 +1,10 @@
 import AvestaCore
+import ComposableArchitecture
 import SwiftUI
 
 struct WorkspaceRow: View {
-    @Environment(AppState.self) private var appState
-    let workspace: Workspace
+    let store: StoreOf<AppFeature>
+    let workspace: AppFeature.WorkspaceState
 
     var body: some View {
         Label {
@@ -20,11 +21,15 @@ struct WorkspaceRow: View {
         }
         .contextMenu {
             Button(role: .destructive) {
-                Task {
-                    await appState.deleteWorkspace(id: workspace.id)
-                }
+                store.send(.deleteWorkspace(workspace.id))
             } label: {
                 Label("Delete Workspace", systemImage: "trash")
+            }
+
+            Button {
+                store.send(.closeWorkspace(workspace.id))
+            } label: {
+                Label("Close Workspace", systemImage: "xmark.circle")
             }
         }
     }

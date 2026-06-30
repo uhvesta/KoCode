@@ -1,6 +1,6 @@
 import Foundation
 
-public struct AppSessionSnapshot: Codable, Sendable {
+public struct AppSessionSnapshot: Codable, Equatable, Sendable {
     public var workspaces: [WorkspaceSnapshot]
     public var activeWorkspaceID: UUID?
     public var cachedRepos: [CachedRepo]
@@ -22,7 +22,7 @@ public struct AppSessionSnapshot: Codable, Sendable {
     }
 }
 
-public struct WorkspaceSnapshot: Codable, Sendable {
+public struct WorkspaceSnapshot: Codable, Equatable, Sendable {
     public var id: UUID
     public var name: String
     public var path: URL
@@ -50,7 +50,7 @@ public struct WorkspaceSnapshot: Codable, Sendable {
     }
 }
 
-public enum TabSnapshot: Codable, Sendable {
+public enum TabSnapshot: Codable, Equatable, Sendable {
     case terminal(TerminalTabSnapshot)
     case codeReview(CodeReviewTabSnapshot)
 
@@ -84,7 +84,7 @@ public enum TabSnapshot: Codable, Sendable {
     }
 }
 
-public struct TerminalTabSnapshot: Codable, Sendable {
+public struct TerminalTabSnapshot: Codable, Equatable, Sendable {
     public var id: UUID
     public var title: String
     public var workingDirectory: URL
@@ -105,13 +105,13 @@ public struct TerminalResumeSnapshot: Codable, Equatable, Sendable {
     }
 }
 
-public struct CodeReviewTabSnapshot: Codable, Sendable {
+public struct CodeReviewTabSnapshot: Codable, Equatable, Sendable {
     public var id: UUID
     public var title: String
     public var session: CodeReviewSessionSnapshot?
 }
 
-public struct CodeReviewSessionSnapshot: Codable, Sendable {
+public struct CodeReviewSessionSnapshot: Codable, Equatable, Sendable {
     public var id: UUID
     public var diffSpec: String
     public var repoPath: URL

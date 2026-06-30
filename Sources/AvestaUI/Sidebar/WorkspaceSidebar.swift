@@ -1,21 +1,20 @@
 import AvestaCore
+import ComposableArchitecture
 import SwiftUI
 
 struct WorkspaceSidebar: View {
-    @Environment(AppState.self) private var appState
+    let store: StoreOf<AppFeature>
     @Binding var showingNewWorkspace: Bool
     @Binding var showingAddRepository: Bool
 
     var body: some View {
-        @Bindable var appState = appState
-
         List(selection: Binding(
-            get: { appState.activeWorkspaceID },
-            set: { appState.selectWorkspace(id: $0) }
+            get: { store.activeWorkspaceID },
+            set: { store.send(.selectWorkspace($0)) }
         )) {
             Section("Workspaces") {
-                ForEach(appState.workspaces) { workspace in
-                    WorkspaceRow(workspace: workspace)
+                ForEach(store.workspaces) { workspace in
+                    WorkspaceRow(store: store, workspace: workspace)
                         .tag(workspace.id)
                 }
             }
@@ -29,7 +28,7 @@ struct WorkspaceSidebar: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
-                .disabled(appState.activeWorkspace == nil)
+                .disabled(store.activeWorkspace == nil)
 
                 Button {
                     showingNewWorkspace = true

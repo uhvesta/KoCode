@@ -1,48 +1,54 @@
 import AvestaCore
+import ComposableArchitecture
 import SwiftUI
 
 struct AddRepositorySheet: View {
-    @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
-    @State private var selectedCachedRepoID: UUID?
-    @State private var remoteURL = ""
-    @State private var branch = "main"
-    @State private var isAdding = false
+    let store: StoreOf<AppFeature>
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Add Repository")
                 .font(.title2.weight(.semibold))
 
-            if let workspace = appState.activeWorkspace {
+            if let workspace = store.activeWorkspace {
                 Text("Adds a worktree to \(workspace.name). Paste a Git URL, or reuse an existing local clone if one is listed.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            TextField("Repository URL", text: $remoteURL)
+            TextField("Repository URL", text: Binding(
+                get: { store.addRepositoryForm.remoteURL },
+                set: { store.send(.addRepository(.remoteURLChanged($0))) }
+            ))
                 .textFieldStyle(.roundedBorder)
-                .disabled(selectedCachedRepoID != nil)
+                .disabled(store.addRepositoryForm.selectedCachedRepoID != nil)
 
-            if !appState.cachedRepos.isEmpty {
-                Picker("Existing local clone", selection: $selectedCachedRepoID) {
+            if !store.cachedRepos.isEmpty {
+                Picker("Existing local clone", selection: Binding(
+                    get: { store.addRepositoryForm.selectedCachedRepoID },
+                    set: { store.send(.addRepository(.selectedCachedRepoChanged($0))) }
+                )) {
                     Text("Clone from URL").tag(UUID?.none)
-                    ForEach(appState.cachedRepos) { repo in
+                    ForEach(store.cachedRepos) { repo in
                         Text("\(repo.name)  \(repo.remoteURL)").tag(UUID?.some(repo.id))
                     }
                 }
 
-                if selectedCachedRepoID != nil {
+                if store.addRepositoryForm.selectedCachedRepoID != nil {
                     Text("This skips cloning and creates another worktree from the existing bare clone.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
 
-            TextField("Branch", text: $branch)
+            TextField("Branch", text: Binding(
+                get: { store.addRepositoryForm.branch },
+                set: { store.send(.addRepository(.branchChanged($0))) }
+            ))
                 .textFieldStyle(.roundedBorder)
 
-            if let error = appState.lastErrorMessage {
+            if let error = store.lastErrorMessage {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)
@@ -51,11 +57,12 @@ struct AddRepositorySheet: View {
             HStack {
                 Spacer()
                 Button("Cancel") {
+                    store.send(.addRepository(.cancelButtonTapped))
                     dismiss()
                 }
 
                 Button("Add") {
-                    addRepository()
+                    store.send(.addRepository(.addButtonTapped))
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(isAddDisabled)
@@ -63,36 +70,14 @@ struct AddRepositorySheet: View {
         }
         .padding(20)
         .frame(width: 440)
-    }
-
-    private var isAddDisabled: Bool {
-        isAdding || appState.activeWorkspace == nil || (selectedCachedRepo == nil && remoteURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-    }
-
-    private var sanitizedBranch: String {
-        let value = branch.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? "main" : value
-    }
-
-    private var selectedCachedRepo: CachedRepo? {
-        guard let selectedCachedRepoID else { return nil }
-        return appState.cachedRepos.first { $0.id == selectedCachedRepoID }
-    }
-
-    private func addRepository() {
-        guard let workspaceID = appState.activeWorkspaceID ?? appState.activeWorkspace?.id else { return }
-        isAdding = true
-        Task {
-            await appState.addRepository(
-                to: workspaceID,
-                cachedRepo: selectedCachedRepo,
-                remoteURL: remoteURL,
-                branch: sanitizedBranch
-            )
-            isAdding = false
-            if appState.lastErrorMessage == nil {
+        .onChange(of: store.addRepositoryForm.isAdding) { _, isAdding in
+            if !isAdding, store.lastErrorMessage == nil, store.addRepositoryForm.remoteURL.isEmpty, store.addRepositoryForm.selectedCachedRepoID == nil {
                 dismiss()
             }
         }
+    }
+
+    private var isAddDisabled: Bool {
+        store.addRepositoryForm.isAdding || store.activeWorkspace == nil || !store.addRepositoryForm.isValid
     }
 }

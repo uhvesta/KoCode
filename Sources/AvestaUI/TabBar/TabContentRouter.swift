@@ -1,32 +1,31 @@
 import AvestaCore
 import AvestaTerminal
+import ComposableArchitecture
 import SwiftUI
 
 struct TabContentRouter: View {
-    @Environment(AppState.self) private var appState
-    let tab: any WorkspaceTab
+    let store: StoreOf<AppFeature>
+    let tab: AppFeature.TabState
     var onTerminalOutput: (UUID, String) -> Void = { _, _ in }
 
     var body: some View {
-        switch tab.kind {
-        case .terminal:
-            if let terminal = tab as? TerminalTabModel {
+        switch tab {
+        case .terminal(let terminal):
                 TerminalSurfaceView(
                     workingDirectory: terminal.workingDirectory,
-                    tabModel: terminal,
+                    tabID: terminal.id,
+                    pendingPaste: terminal.pendingPaste,
+                    resume: terminal.resume,
                     onOutput: { output in
+                        store.send(.terminalOutput(tabID: terminal.id, output: output))
                         onTerminalOutput(terminal.id, output)
+                    },
+                    onPasteConsumed: {
+                        store.send(.terminalPasteConsumed(tabID: terminal.id))
                     }
                 )
-            } else {
-                ContentUnavailableView("Unsupported Terminal Tab", systemImage: "terminal")
-            }
-        case .codeReview:
-            if let codeReview = tab as? CodeReviewTabModel {
-                CodeReviewView(model: codeReview)
-            } else {
-                ContentUnavailableView("Unsupported Code Review Tab", systemImage: "text.page")
-            }
+        case .codeReview(let codeReview):
+            CodeReviewView(store: store, tab: codeReview)
         }
     }
 }

@@ -1,6 +1,6 @@
 import Foundation
 
-public struct AppConfig: Codable, Sendable {
+public struct AppConfig: Codable, Equatable, Sendable {
     public var workspacesRoot: URL
     public var cacheRoot: URL
     public var notificationPatterns: [String]

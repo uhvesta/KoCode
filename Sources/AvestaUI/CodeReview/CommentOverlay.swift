@@ -10,6 +10,8 @@ struct CommentOverlay: View {
             TextEditor(text: $text)
                 .font(.body)
                 .frame(width: 320, height: 120)
+                .accessibilityLabel("Comment Text")
+                .accessibilityIdentifier("code-review-comment-text")
                 .overlay {
                     RoundedRectangle(cornerRadius: 6)
                         .stroke(.separator)
@@ -17,6 +19,7 @@ struct CommentOverlay: View {
 
             Button("Save Comment", action: save)
                 .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("code-review-save-comment")
         }
         .padding()
         .background(.regularMaterial)

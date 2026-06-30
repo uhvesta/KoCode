@@ -20,12 +20,16 @@ struct BoardItemRow: View {
                     Image(systemName: "doc.on.doc")
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel("Copy Board Item")
+                .accessibilityIdentifier("board-copy-item")
                 .help("Copy")
 
                 Button(action: paste) {
                     Image(systemName: "terminal")
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel("Paste Board Item to Terminal")
+                .accessibilityIdentifier("board-paste-item-to-terminal")
                 .help("Paste to Terminal")
             }
 
@@ -34,11 +38,12 @@ struct BoardItemRow: View {
                 .lineLimit(isExpanded ? nil : 4)
                 .textSelection(.enabled)
 
-            Text(item.createdAt, style: .relative)
+            Text(item.createdAt.formatted(date: .abbreviated, time: .shortened))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
+        .accessibilityIdentifier("board-item-row")
         .onTapGesture {
             isExpanded.toggle()
         }

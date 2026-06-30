@@ -1,40 +1,48 @@
 import AvestaCore
+import ComposableArchitecture
 import SwiftUI
 
 struct NewWorkspaceSheet: View {
-    @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
-    @State private var name = ""
-    @State private var selectedCachedRepoID: UUID?
-    @State private var remoteURL = ""
-    @State private var branch = "main"
-    @State private var isCreating = false
+    let store: StoreOf<AppFeature>
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("New Workspace")
                 .font(.title2.weight(.semibold))
 
-            TextField("Name", text: $name)
+            TextField("Name", text: Binding(
+                get: { store.newWorkspaceForm.name },
+                set: { store.send(.newWorkspace(.nameChanged($0))) }
+            ))
                 .textFieldStyle(.roundedBorder)
 
-            TextField("Repository URL", text: $remoteURL)
+            TextField("Repository URL", text: Binding(
+                get: { store.newWorkspaceForm.remoteURL },
+                set: { store.send(.newWorkspace(.remoteURLChanged($0))) }
+            ))
                 .textFieldStyle(.roundedBorder)
-                .disabled(selectedCachedRepoID != nil)
+                .disabled(store.newWorkspaceForm.selectedCachedRepoID != nil)
 
-            if !appState.cachedRepos.isEmpty {
-                Picker("Existing local clone", selection: $selectedCachedRepoID) {
+            if !store.cachedRepos.isEmpty {
+                Picker("Existing local clone", selection: Binding(
+                    get: { store.newWorkspaceForm.selectedCachedRepoID },
+                    set: { store.send(.newWorkspace(.selectedCachedRepoChanged($0))) }
+                )) {
                     Text("Clone from URL").tag(UUID?.none)
-                    ForEach(appState.cachedRepos) { repo in
+                    ForEach(store.cachedRepos) { repo in
                         Text("\(repo.name)  \(repo.remoteURL)").tag(UUID?.some(repo.id))
                     }
                 }
             }
 
-            TextField("Branch", text: $branch)
+            TextField("Branch", text: Binding(
+                get: { store.newWorkspaceForm.branch },
+                set: { store.send(.newWorkspace(.branchChanged($0))) }
+            ))
                 .textFieldStyle(.roundedBorder)
 
-            if let error = appState.lastErrorMessage {
+            if let error = store.lastErrorMessage {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)
@@ -43,42 +51,22 @@ struct NewWorkspaceSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel") {
+                    store.send(.newWorkspace(.cancelButtonTapped))
                     dismiss()
                 }
                 Button("Create") {
-                    isCreating = true
-                    Task {
-                        await appState.createWorkspace(
-                            name: sanitizedName,
-                            cachedRepo: selectedCachedRepo,
-                            remoteURL: remoteURL,
-                            branch: sanitizedBranch
-                        )
-                        isCreating = false
-                        if appState.lastErrorMessage == nil {
-                            dismiss()
-                        }
-                    }
+                    store.send(.newWorkspace(.createButtonTapped(id: UUID())))
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(sanitizedName.isEmpty || isCreating)
+                .disabled(!store.newWorkspaceForm.isValid || store.newWorkspaceForm.isCreating)
             }
         }
         .padding(20)
         .frame(width: 420)
-    }
-
-    private var sanitizedName: String {
-        name.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var sanitizedBranch: String {
-        let value = branch.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? "main" : value
-    }
-
-    private var selectedCachedRepo: CachedRepo? {
-        guard let selectedCachedRepoID else { return nil }
-        return appState.cachedRepos.first { $0.id == selectedCachedRepoID }
+        .onChange(of: store.newWorkspaceForm.isCreating) { _, isCreating in
+            if !isCreating, store.lastErrorMessage == nil, store.newWorkspaceForm.name.isEmpty {
+                dismiss()
+            }
+        }
     }
 }

@@ -56,4 +56,9 @@ if [ -d "$ROOT_DIR/App/Assets.xcassets" ]; then
   cp -R "$ROOT_DIR/App/Assets.xcassets" "$RESOURCES_DIR/Assets.xcassets"
 fi
 
+for bundle in "$BUILD_DIR"/*.bundle; do
+  [ -d "$bundle" ] || continue
+  cp -R "$bundle" "$RESOURCES_DIR/$(basename "$bundle")"
+done
+
 echo "$APP_DIR"

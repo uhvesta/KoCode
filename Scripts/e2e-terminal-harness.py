@@ -160,9 +160,25 @@ def check_accessibility_permission() -> None:
 
 def screenshot(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    proc = run(["screencapture", "-x", str(path)], check=False, capture=True)
+    rect = avestacode_window_rect()
+    proc = run(["screencapture", "-x", f"-R{rect}", str(path)], check=False, capture=True)
     if proc.returncode != 0:
         path.with_suffix(path.suffix + ".txt").write_text(proc.stdout or "screencapture failed")
+
+
+def avestacode_window_rect() -> str:
+    script = f'''
+tell application "System Events"
+  tell process "{APP_NAME}"
+    if not (exists window 1) then error "No AvestaCode window is available"
+    set windowPosition to position of window 1
+    set windowSize to size of window 1
+    return ((item 1 of windowPosition) as string) & "," & ((item 2 of windowPosition) as string) & "," & ((item 1 of windowSize) as string) & "," & ((item 2 of windowSize) as string)
+  end tell
+end tell
+'''
+    proc = osascript(script)
+    return (proc.stdout or "").strip()
 
 
 def click_terminal_area() -> None:

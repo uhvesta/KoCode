@@ -4,8 +4,11 @@ import SwiftUI
 
 public struct TerminalSurfaceView: NSViewRepresentable {
     public let workingDirectory: URL
-    public let tabModel: TerminalTabModel
+    public let tabID: UUID
+    public let pendingPaste: String?
+    public let resume: TerminalResumeSnapshot?
     public var onOutput: (String) -> Void
+    public var onPasteConsumed: () -> Void
 
     public init(
         workingDirectory: URL,
@@ -13,31 +16,47 @@ public struct TerminalSurfaceView: NSViewRepresentable {
         onOutput: @escaping (String) -> Void = { _ in }
     ) {
         self.workingDirectory = workingDirectory
-        self.tabModel = tabModel
+        self.tabID = tabModel.id
+        self.pendingPaste = tabModel.pendingPaste
+        self.resume = tabModel.resume
         self.onOutput = onOutput
+        self.onPasteConsumed = {}
+    }
+
+    public init(
+        workingDirectory: URL,
+        tabID: UUID,
+        pendingPaste: String?,
+        resume: TerminalResumeSnapshot?,
+        onOutput: @escaping (String) -> Void = { _ in },
+        onPasteConsumed: @escaping () -> Void = {}
+    ) {
+        self.workingDirectory = workingDirectory
+        self.tabID = tabID
+        self.pendingPaste = pendingPaste
+        self.resume = resume
+        self.onOutput = onOutput
+        self.onPasteConsumed = onPasteConsumed
     }
 
     public func makeNSView(context: Context) -> TerminalMetalView {
         let view = TerminalMetalView()
         view.createSurface(
             workingDirectory: workingDirectory,
-            startupInput: tabModel.resume.map { $0.command + "\n" },
+            startupInput: resume.map { $0.command + "\n" },
             onOutput: { output in
-                tabModel.appendOutput(output)
                 onOutput(output)
             },
-            onExit: {
-                tabModel.isProcessRunning = false
-            }
+            onExit: {}
         )
         return view
     }
 
     public func updateNSView(_ nsView: TerminalMetalView, context: Context) {
         nsView.toolTip = workingDirectory.path
-        if let pendingPaste = tabModel.pendingPaste {
+        if let pendingPaste {
             nsView.paste(pendingPaste)
-            tabModel.pendingPaste = nil
+            onPasteConsumed()
         }
     }
 
@@ -55,13 +74,35 @@ import SwiftUI
 
 public struct TerminalSurfaceView: View {
     public let workingDirectory: URL
-    public let tabModel: TerminalTabModel
+    public let tabID: UUID
+    public let pendingPaste: String?
+    public let resume: TerminalResumeSnapshot?
     public var onOutput: (String) -> Void
+    public var onPasteConsumed: () -> Void
 
     public init(workingDirectory: URL, tabModel: TerminalTabModel, onOutput: @escaping (String) -> Void = { _ in }) {
         self.workingDirectory = workingDirectory
-        self.tabModel = tabModel
+        self.tabID = tabModel.id
+        self.pendingPaste = tabModel.pendingPaste
+        self.resume = tabModel.resume
         self.onOutput = onOutput
+        self.onPasteConsumed = {}
+    }
+
+    public init(
+        workingDirectory: URL,
+        tabID: UUID,
+        pendingPaste: String?,
+        resume: TerminalResumeSnapshot?,
+        onOutput: @escaping (String) -> Void = { _ in },
+        onPasteConsumed: @escaping () -> Void = {}
+    ) {
+        self.workingDirectory = workingDirectory
+        self.tabID = tabID
+        self.pendingPaste = pendingPaste
+        self.resume = resume
+        self.onOutput = onOutput
+        self.onPasteConsumed = onPasteConsumed
     }
 
     public var body: some View {

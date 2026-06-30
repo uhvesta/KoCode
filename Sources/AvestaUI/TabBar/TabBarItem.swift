@@ -2,7 +2,7 @@ import AvestaCore
 import SwiftUI
 
 struct TabBarItem: View {
-    let tab: any WorkspaceTab
+    let tab: AppFeature.TabState
     let isActive: Bool
     let badgeCount: Int
     let select: () -> Void
@@ -17,13 +17,11 @@ struct TabBarItem: View {
 
                 NotificationBadge(count: badgeCount)
 
-                if tab.isClosable {
-                    Button(action: close) {
-                        Image(systemName: "xmark")
-                    }
-                    .buttonStyle(.plain)
-                    .help("Close Tab")
+                Button(action: close) {
+                    Image(systemName: "xmark")
                 }
+                .buttonStyle(.plain)
+                .help("Close Tab")
             }
             .padding(.horizontal, 12)
             .frame(height: 32)

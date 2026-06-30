@@ -1,21 +1,21 @@
 import AvestaCore
+import ComposableArchitecture
 import SwiftUI
 
 struct NewTabMenu: View {
-    @Environment(AppState.self) private var appState
-    let workspace: Workspace
+    let store: StoreOf<AppFeature>
 
     var body: some View {
         Menu {
             Button {
-                appState.addTerminalTab()
+                store.send(.addTerminalTab(id: UUID()))
             } label: {
                 Label("Terminal", systemImage: "terminal")
             }
             .keyboardShortcut("t", modifiers: .command)
 
             Button {
-                appState.addCodeReviewTab()
+                store.send(.addCodeReviewTab(id: UUID()))
             } label: {
                 Label("Code Review", systemImage: "text.page")
             }

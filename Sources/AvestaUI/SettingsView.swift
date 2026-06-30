@@ -1,34 +1,38 @@
 import AvestaCore
+import ComposableArchitecture
 import SwiftUI
 
 public struct SettingsView: View {
-    @Environment(AppState.self) private var appState
+    let store: StoreOf<AppFeature>
 
-    public init() {}
+    public init(store: StoreOf<AppFeature>) {
+        self.store = store
+    }
 
     public var body: some View {
-        @Bindable var appState = appState
-
         Form {
             Section("Paths") {
                 TextField("Workspaces Root", text: Binding(
-                    get: { appState.config.workspacesRoot.path },
-                    set: { appState.config.workspacesRoot = URL(fileURLWithPath: $0, isDirectory: true) }
+                    get: { store.settings.config.workspacesRoot.path },
+                    set: { store.send(.settings(.workspacesRootChanged($0))) }
                 ))
                 TextField("Cache Root", text: Binding(
-                    get: { appState.config.cacheRoot.path },
-                    set: { appState.config.cacheRoot = URL(fileURLWithPath: $0, isDirectory: true) }
+                    get: { store.settings.config.cacheRoot.path },
+                    set: { store.send(.settings(.cacheRootChanged($0))) }
                 ))
             }
 
             Section("Notification Patterns") {
-                ForEach(appState.config.notificationPatterns.indices, id: \.self) { index in
-                    TextField("Pattern", text: $appState.config.notificationPatterns[index])
+                ForEach(store.settings.config.notificationPatterns.indices, id: \.self) { index in
+                    TextField("Pattern", text: Binding(
+                        get: { store.settings.config.notificationPatterns[index] },
+                        set: { store.send(.settings(.notificationPatternChanged(index: index, value: $0))) }
+                    ))
                         .font(.system(.body, design: .monospaced))
                 }
 
                 Button {
-                    appState.config.notificationPatterns.append("")
+                    store.send(.settings(.addNotificationPatternButtonTapped))
                 } label: {
                     Label("Add Pattern", systemImage: "plus")
                 }
