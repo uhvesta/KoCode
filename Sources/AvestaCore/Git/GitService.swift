@@ -22,12 +22,23 @@ public actor GitService {
         return bareRepo
     }
 
-    public func createWorktree(bareRepo: URL, branch: String, destination: URL) async throws {
+    public func createWorktree(
+        bareRepo: URL,
+        branch: String,
+        destination: URL,
+        baseBranch: String? = nil
+    ) async throws {
         try fileManager.createDirectory(
             at: destination.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        _ = try await run(["git", "-C", bareRepo.path, "worktree", "add", destination.path, branch], cwd: nil)
+
+        if try await localBranchExists(bareRepo: bareRepo, branch: branch) {
+            _ = try await run(["git", "-C", bareRepo.path, "worktree", "add", destination.path, branch], cwd: nil)
+        } else {
+            let baseRef = try await worktreeBaseRef(bareRepo: bareRepo, preferredBranch: baseBranch)
+            _ = try await run(["git", "-C", bareRepo.path, "worktree", "add", "-b", branch, destination.path, baseRef], cwd: nil)
+        }
     }
 
     public func removeWorktree(bareRepo: URL, worktreePath: URL) async throws {
@@ -114,6 +125,47 @@ public actor GitService {
             files.append(ReviewCheckpointFile(path: path, content: content))
         }
         return files
+    }
+
+    private func localBranchExists(bareRepo: URL, branch: String) async throws -> Bool {
+        let output = try await run(
+            ["git", "-C", bareRepo.path, "show-ref", "--verify", "refs/heads/\(branch)"],
+            cwd: nil,
+            allowedStatuses: [0, 1, 128]
+        )
+        return !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func worktreeBaseRef(bareRepo: URL, preferredBranch: String?) async throws -> String {
+        let candidates = try await baseBranchCandidates(bareRepo: bareRepo, preferredBranch: preferredBranch)
+        for candidate in candidates {
+            if try await localBranchExists(bareRepo: bareRepo, branch: candidate) {
+                return candidate
+            }
+        }
+        return candidates.first ?? "HEAD"
+    }
+
+    private func baseBranchCandidates(bareRepo: URL, preferredBranch: String?) async throws -> [String] {
+        var candidates: [String] = []
+        if let preferredBranch = preferredBranch?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !preferredBranch.isEmpty {
+            candidates.append(preferredBranch)
+        }
+
+        let defaultBranch = try await run(
+            ["git", "-C", bareRepo.path, "symbolic-ref", "--quiet", "--short", "HEAD"],
+            cwd: nil,
+            allowedStatuses: [0, 1]
+        )
+        let trimmedDefault = defaultBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedDefault.isEmpty {
+            candidates.append(trimmedDefault)
+        }
+
+        candidates.append(contentsOf: ["main", "master"])
+        var seen: Set<String> = []
+        return candidates.filter { seen.insert($0).inserted }
     }
 
     private func diffSnapshots(

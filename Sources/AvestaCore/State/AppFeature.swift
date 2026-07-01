@@ -750,13 +750,23 @@ public struct AppFeature: Sendable {
                             var createdCachedRepo: CachedRepo?
                             if let cachedRepo {
                                 let worktreePath = workspacePath.appending(path: cachedRepo.name, directoryHint: .isDirectory)
-                                try await gitService.createWorktree(bareRepo: cachedRepo.bareClonePath, branch: form.sanitizedBranch, destination: worktreePath)
+                                try await gitService.createWorktree(
+                                    bareRepo: cachedRepo.bareClonePath,
+                                    branch: form.sanitizedBranch,
+                                    destination: worktreePath,
+                                    baseBranch: form.sanitizedBaseBranch
+                                )
                                 repos.append(WorktreeRef(repoName: cachedRepo.name, bareRepoPath: cachedRepo.bareClonePath, worktreePath: worktreePath, branch: form.sanitizedBranch, remoteURL: cachedRepo.remoteURL))
                             } else if !form.sanitizedRemoteURL.isEmpty {
                                 let repoName = Self.repositoryName(from: form.sanitizedRemoteURL)
                                 let bareRepo = try await gitService.ensureBareClone(remoteURL: form.sanitizedRemoteURL, name: repoName)
                                 let worktreePath = workspacePath.appending(path: repoName, directoryHint: .isDirectory)
-                                try await gitService.createWorktree(bareRepo: bareRepo, branch: form.sanitizedBranch, destination: worktreePath)
+                                try await gitService.createWorktree(
+                                    bareRepo: bareRepo,
+                                    branch: form.sanitizedBranch,
+                                    destination: worktreePath,
+                                    baseBranch: form.sanitizedBaseBranch
+                                )
                                 createdCachedRepo = CachedRepo(name: repoName, bareClonePath: bareRepo, remoteURL: form.sanitizedRemoteURL, lastFetched: Date())
                                 repos.append(WorktreeRef(repoName: repoName, bareRepoPath: bareRepo, worktreePath: worktreePath, branch: form.sanitizedBranch, remoteURL: form.sanitizedRemoteURL))
                             }
@@ -796,7 +806,12 @@ public struct AppFeature: Sendable {
                                 createdCachedRepo = CachedRepo(name: repoName, bareClonePath: bareRepo, remoteURL: origin, lastFetched: Date())
                             }
                             let worktreePath = availableWorktreePath(for: repoName, in: workspace.path)
-                            try await gitService.createWorktree(bareRepo: bareRepo, branch: form.sanitizedBranch, destination: worktreePath)
+                            try await gitService.createWorktree(
+                                bareRepo: bareRepo,
+                                branch: form.sanitizedBranch,
+                                destination: worktreePath,
+                                baseBranch: form.sanitizedBaseBranch
+                            )
                             let repo = WorktreeRef(repoName: repoName, bareRepoPath: bareRepo, worktreePath: worktreePath, branch: form.sanitizedBranch, remoteURL: origin)
                             await send(.addRepositoryResponse(workspaceID: workspace.id, repo: repo, cachedRepo: createdCachedRepo, .success))
                         } catch {
@@ -1120,6 +1135,7 @@ public struct NewWorkspaceFeature: Sendable {
         public var selectedCachedRepoID: UUID?
         public var remoteURL: String
         public var branch: String
+        public var baseBranch: String
         public var isCreating: Bool
 
         public init(
@@ -1127,12 +1143,14 @@ public struct NewWorkspaceFeature: Sendable {
             selectedCachedRepoID: UUID? = nil,
             remoteURL: String = "",
             branch: String = "main",
+            baseBranch: String = "main",
             isCreating: Bool = false
         ) {
             self.name = name
             self.selectedCachedRepoID = selectedCachedRepoID
             self.remoteURL = remoteURL
             self.branch = branch
+            self.baseBranch = baseBranch
             self.isCreating = isCreating
         }
 
@@ -1149,6 +1167,11 @@ public struct NewWorkspaceFeature: Sendable {
             return value.isEmpty ? "main" : value
         }
 
+        public var sanitizedBaseBranch: String? {
+            let value = baseBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        }
+
         public var isValid: Bool {
             !sanitizedName.isEmpty
         }
@@ -1159,6 +1182,7 @@ public struct NewWorkspaceFeature: Sendable {
         case selectedCachedRepoChanged(UUID?)
         case remoteURLChanged(String)
         case branchChanged(String)
+        case baseBranchChanged(String)
         case createButtonTapped(id: UUID)
         case cancelButtonTapped
     }
@@ -1176,6 +1200,8 @@ public struct NewWorkspaceFeature: Sendable {
                 state.remoteURL = value
             case .branchChanged(let value):
                 state.branch = value
+            case .baseBranchChanged(let value):
+                state.baseBranch = value
             case .createButtonTapped:
                 state.isCreating = state.isValid
             case .cancelButtonTapped:
@@ -1193,17 +1219,20 @@ public struct AddRepositoryFeature: Sendable {
         public var selectedCachedRepoID: UUID?
         public var remoteURL: String
         public var branch: String
+        public var baseBranch: String
         public var isAdding: Bool
 
         public init(
             selectedCachedRepoID: UUID? = nil,
             remoteURL: String = "",
             branch: String = "main",
+            baseBranch: String = "main",
             isAdding: Bool = false
         ) {
             self.selectedCachedRepoID = selectedCachedRepoID
             self.remoteURL = remoteURL
             self.branch = branch
+            self.baseBranch = baseBranch
             self.isAdding = isAdding
         }
 
@@ -1216,6 +1245,11 @@ public struct AddRepositoryFeature: Sendable {
             return value.isEmpty ? "main" : value
         }
 
+        public var sanitizedBaseBranch: String? {
+            let value = baseBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        }
+
         public var isValid: Bool {
             selectedCachedRepoID != nil || !sanitizedRemoteURL.isEmpty
         }
@@ -1225,6 +1259,7 @@ public struct AddRepositoryFeature: Sendable {
         case selectedCachedRepoChanged(UUID?)
         case remoteURLChanged(String)
         case branchChanged(String)
+        case baseBranchChanged(String)
         case addButtonTapped
         case cancelButtonTapped
     }
@@ -1240,6 +1275,8 @@ public struct AddRepositoryFeature: Sendable {
                 state.remoteURL = value
             case .branchChanged(let value):
                 state.branch = value
+            case .baseBranchChanged(let value):
+                state.baseBranch = value
             case .addButtonTapped:
                 state.isAdding = state.isValid
             case .cancelButtonTapped:

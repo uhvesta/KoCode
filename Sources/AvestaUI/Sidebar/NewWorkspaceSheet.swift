@@ -42,6 +42,15 @@ struct NewWorkspaceSheet: View {
             ))
                 .textFieldStyle(.roundedBorder)
 
+            TextField("Base branch", text: Binding(
+                get: { store.newWorkspaceForm.baseBranch },
+                set: { store.send(.newWorkspace(.baseBranchChanged($0))) }
+            ))
+                .textFieldStyle(.roundedBorder)
+            Text("Enter an existing branch to check it out, or a new branch name to create it from the base branch.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
             if let error = store.lastErrorMessage {
                 Text(error)
                     .font(.caption)

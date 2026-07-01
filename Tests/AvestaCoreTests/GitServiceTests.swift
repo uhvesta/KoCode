@@ -35,6 +35,67 @@ final class GitServiceTests: XCTestCase {
         try await service.removeWorktree(bareRepo: bare, worktreePath: worktree)
     }
 
+    func testCreateWorktreeCreatesMissingBranchFromDefaultBranch() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "AvestaCodeGitNewBranchWorktreeTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let source = root.appending(path: "source", directoryHint: .isDirectory)
+        let cache = root.appending(path: "cache", directoryHint: .isDirectory)
+        let worktree = root.appending(path: "worktree", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try run(["git", "init", "-b", "main"], cwd: source)
+        try "from main\n".write(to: source.appending(path: "file.txt"), atomically: true, encoding: .utf8)
+        try run(["git", "add", "file.txt"], cwd: source)
+        try run(["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "initial"], cwd: source)
+
+        let service = GitService(cacheRoot: cache)
+        let bare = try await service.ensureBareClone(remoteURL: source.path, name: "source")
+        try await service.createWorktree(bareRepo: bare, branch: "main2", destination: worktree)
+
+        let currentBranch = try await service.currentBranch(repoPath: worktree)
+        let content = try String(contentsOf: worktree.appending(path: "file.txt"), encoding: .utf8)
+        let branches = try await service.branches(repoPath: bare)
+
+        XCTAssertEqual(currentBranch, "main2")
+        XCTAssertEqual(content, "from main\n")
+        XCTAssertTrue(branches.contains("main2"))
+    }
+
+    func testCreateWorktreeCreatesMissingBranchFromExplicitBaseBranch() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "AvestaCodeGitExplicitBaseWorktreeTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let source = root.appending(path: "source", directoryHint: .isDirectory)
+        let cache = root.appending(path: "cache", directoryHint: .isDirectory)
+        let worktree = root.appending(path: "worktree", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try run(["git", "init", "-b", "main"], cwd: source)
+        try "from main\n".write(to: source.appending(path: "file.txt"), atomically: true, encoding: .utf8)
+        try run(["git", "add", "file.txt"], cwd: source)
+        try run(["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "initial"], cwd: source)
+        try run(["git", "switch", "-c", "review-base"], cwd: source)
+        try "from review-base\n".write(to: source.appending(path: "file.txt"), atomically: true, encoding: .utf8)
+        try run(["git", "add", "file.txt"], cwd: source)
+        try run(["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "base change"], cwd: source)
+
+        let service = GitService(cacheRoot: cache)
+        let bare = try await service.ensureBareClone(remoteURL: source.path, name: "source")
+        try await service.createWorktree(
+            bareRepo: bare,
+            branch: "review-child",
+            destination: worktree,
+            baseBranch: "review-base"
+        )
+
+        let currentBranch = try await service.currentBranch(repoPath: worktree)
+        let content = try String(contentsOf: worktree.appending(path: "file.txt"), encoding: .utf8)
+
+        XCTAssertEqual(currentBranch, "review-child")
+        XCTAssertEqual(content, "from review-base\n")
+    }
+
     func testWorkingTreeAndCheckpointDiffsIncludeLastTurnOnly() async throws {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "AvestaCodeGitCheckpointTests-\(UUID().uuidString)", directoryHint: .isDirectory)
