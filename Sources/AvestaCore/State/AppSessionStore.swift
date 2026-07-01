@@ -116,8 +116,73 @@ public struct CodeReviewSessionSnapshot: Codable, Equatable, Sendable {
     public var diffSpec: String
     public var repoPath: URL
     public var files: [FileDiff]
+    public var lastTurnFiles: [FileDiff]
     public var activeFileIndex: Int
     public var comments: [ReviewComment]
+    public var scope: CodeReviewScope
+    public var diffMode: CodeReviewDiffMode
+    public var checkpoint: ReviewCheckpoint?
+    public var gitChangesError: String?
+    public var lastTurnError: String?
+
+    public init(
+        id: UUID,
+        diffSpec: String,
+        repoPath: URL,
+        files: [FileDiff],
+        lastTurnFiles: [FileDiff] = [],
+        activeFileIndex: Int,
+        comments: [ReviewComment],
+        scope: CodeReviewScope = .gitChanges,
+        diffMode: CodeReviewDiffMode = .file,
+        checkpoint: ReviewCheckpoint? = nil,
+        gitChangesError: String? = nil,
+        lastTurnError: String? = nil
+    ) {
+        self.id = id
+        self.diffSpec = diffSpec
+        self.repoPath = repoPath
+        self.files = files
+        self.lastTurnFiles = lastTurnFiles
+        self.activeFileIndex = activeFileIndex
+        self.comments = comments
+        self.scope = scope
+        self.diffMode = diffMode
+        self.checkpoint = checkpoint
+        self.gitChangesError = gitChangesError
+        self.lastTurnError = lastTurnError
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case diffSpec
+        case repoPath
+        case files
+        case lastTurnFiles
+        case activeFileIndex
+        case comments
+        case scope
+        case diffMode
+        case checkpoint
+        case gitChangesError
+        case lastTurnError
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        diffSpec = try container.decode(String.self, forKey: .diffSpec)
+        repoPath = try container.decode(URL.self, forKey: .repoPath)
+        files = try container.decode([FileDiff].self, forKey: .files)
+        lastTurnFiles = try container.decodeIfPresent([FileDiff].self, forKey: .lastTurnFiles) ?? []
+        activeFileIndex = try container.decode(Int.self, forKey: .activeFileIndex)
+        comments = try container.decode([ReviewComment].self, forKey: .comments)
+        scope = try container.decodeIfPresent(CodeReviewScope.self, forKey: .scope) ?? .gitChanges
+        diffMode = try container.decodeIfPresent(CodeReviewDiffMode.self, forKey: .diffMode) ?? .file
+        checkpoint = try container.decodeIfPresent(ReviewCheckpoint.self, forKey: .checkpoint)
+        gitChangesError = try container.decodeIfPresent(String.self, forKey: .gitChangesError)
+        lastTurnError = try container.decodeIfPresent(String.self, forKey: .lastTurnError)
+    }
 }
 
 public struct AppSessionStore: Sendable {

@@ -34,6 +34,12 @@ public struct CodeReviewFlowFeature: Sendable {
             self.selectedLine = selectedLine
             self.commentText = commentText
         }
+
+        public mutating func syncNavigationToActiveFile() {
+            navigation = CodeReviewNavigationState(
+                changes: session.activeFile.map(CodeReviewChangeNavigation.changes(in:)) ?? []
+            )
+        }
     }
 
     public enum ActiveTab: Equatable, Sendable {
@@ -46,28 +52,98 @@ public struct CodeReviewFlowFeature: Sendable {
         public var diffSpec: String
         public var repoPath: URL
         public var files: [FileDiff]
+        public var lastTurnFiles: [FileDiff]
         public var activeFileIndex: Int
         public var comments: [ReviewComment]
+        public var scope: CodeReviewScope
+        public var diffMode: CodeReviewDiffMode
+        public var checkpoint: ReviewCheckpoint?
+        public var gitChangesError: String?
+        public var lastTurnError: String?
 
         public init(
             id: UUID = UUID(),
             diffSpec: String,
             repoPath: URL,
             files: [FileDiff],
+            lastTurnFiles: [FileDiff] = [],
             activeFileIndex: Int = 0,
-            comments: [ReviewComment] = []
+            comments: [ReviewComment] = [],
+            scope: CodeReviewScope = .gitChanges,
+            diffMode: CodeReviewDiffMode = .file,
+            checkpoint: ReviewCheckpoint? = nil,
+            gitChangesError: String? = nil,
+            lastTurnError: String? = nil
         ) {
             self.id = id
             self.diffSpec = diffSpec
             self.repoPath = repoPath
             self.files = files
+            self.lastTurnFiles = lastTurnFiles
             self.activeFileIndex = activeFileIndex
             self.comments = comments
+            self.scope = scope
+            self.diffMode = diffMode
+            self.checkpoint = checkpoint
+            self.gitChangesError = gitChangesError
+            self.lastTurnError = lastTurnError
+        }
+
+        public var activeFiles: [FileDiff] {
+            switch scope {
+            case .gitChanges: return files
+            case .lastTurnChanges: return lastTurnFiles
+            }
         }
 
         public var activeFile: FileDiff? {
-            guard files.indices.contains(activeFileIndex) else { return nil }
-            return files[activeFileIndex]
+            guard activeFiles.indices.contains(activeFileIndex) else { return nil }
+            return activeFiles[activeFileIndex]
+        }
+
+        public var activeFileCount: Int {
+            activeFiles.count
+        }
+
+        public var allFilesByPath: [FileDiff] {
+            var seen: Set<String> = []
+            var output: [FileDiff] = []
+            for file in files + lastTurnFiles where !seen.contains(file.path) {
+                output.append(file)
+                seen.insert(file.path)
+            }
+            return output
+        }
+
+        public mutating func selectScope(_ nextScope: CodeReviewScope) {
+            let selectedPath = activeFile?.path
+            scope = nextScope
+            if let selectedPath,
+               let preservedIndex = activeFiles.firstIndex(where: { $0.path == selectedPath }) {
+                activeFileIndex = preservedIndex
+            } else {
+                activeFileIndex = 0
+            }
+        }
+
+        public mutating func replaceGitFiles(_ nextFiles: [FileDiff]) {
+            let selectedPath = activeFile?.path
+            files = nextFiles
+            if scope == .gitChanges {
+                activeFileIndex = selectedPath.flatMap { path in
+                    files.firstIndex { $0.path == path }
+                } ?? 0
+            }
+        }
+
+        public mutating func replaceLastTurnFiles(_ nextFiles: [FileDiff]) {
+            let selectedPath = activeFile?.path
+            lastTurnFiles = nextFiles
+            if scope == .lastTurnChanges {
+                activeFileIndex = selectedPath.flatMap { path in
+                    lastTurnFiles.firstIndex { $0.path == path }
+                } ?? 0
+            }
         }
 
         public func markdown(now: Date = Date()) -> String {
@@ -75,7 +151,7 @@ public struct CodeReviewFlowFeature: Sendable {
                 "# Code Review: \(diffSpec) @ \(Self.dateFormatter.string(from: now))"
             ]
 
-            for file in files {
+            for file in allFilesByPath {
                 let fileComments = comments.filter { $0.fileID == file.id }
                 guard !fileComments.isEmpty else { continue }
 
@@ -84,17 +160,7 @@ public struct CodeReviewFlowFeature: Sendable {
 
                 for comment in fileComments.sorted(by: { $0.startLine < $1.startLine }) {
                     output.append("")
-                    if comment.startLine == comment.endLine {
-                        output.append("### Line \(comment.startLine)")
-                    } else {
-                        output.append("### Lines \(comment.startLine)-\(comment.endLine)")
-                    }
-                    if !comment.highlightedText.isEmpty {
-                        output.append("```\(languageIdentifier(for: file.path))")
-                        output.append(comment.highlightedText)
-                        output.append("```")
-                    }
-                    output.append(comment.text)
+                    append(comment: comment, file: file, to: &output)
                 }
             }
 
@@ -104,6 +170,20 @@ public struct CodeReviewFlowFeature: Sendable {
             }
 
             return output.joined(separator: "\n")
+        }
+
+        private func append(comment: ReviewComment, file: FileDiff, to output: inout [String]) {
+            if comment.startLine == comment.endLine {
+                output.append("### Line \(comment.startLine)")
+            } else {
+                output.append("### Lines \(comment.startLine)-\(comment.endLine)")
+            }
+            if !comment.highlightedText.isEmpty {
+                output.append("```\(languageIdentifier(for: file.path))")
+                output.append(comment.highlightedText)
+                output.append("```")
+            }
+            output.append(comment.text)
         }
 
         private func languageIdentifier(for path: String) -> String {
@@ -142,10 +222,14 @@ public struct CodeReviewFlowFeature: Sendable {
     public enum Action: Equatable, Sendable {
         case previousChangeButtonTapped
         case nextChangeButtonTapped
+        case scopeSelected(CodeReviewScope)
+        case diffModeSelected(CodeReviewDiffMode)
         case activeFileChanged(Int)
         case selectLine(PendingLine)
+        case cancelCommentButtonTapped
         case commentTextChanged(String)
         case saveCommentButtonTapped(id: UUID, createdAt: Date)
+        case deleteCommentButtonTapped(UUID)
         case sendReviewToBoardButtonTapped(id: UUID, now: Date)
         case switchToTerminal
         case pasteBoardItemToTerminal(UUID)
@@ -162,12 +246,23 @@ public struct CodeReviewFlowFeature: Sendable {
                 CodeReviewChangeNavigation.reduce(state: &state.navigation, action: .nextChange)
                 return .none
 
+            case .scopeSelected(let scope):
+                state.session.selectScope(scope)
+                state.syncNavigationToActiveFile()
+                state.selectedLine = nil
+                state.commentText = ""
+                return .none
+
+            case .diffModeSelected(let mode):
+                state.session.diffMode = mode
+                return .none
+
             case .activeFileChanged(let index):
-                guard state.session.files.indices.contains(index) else { return .none }
+                guard state.session.activeFiles.indices.contains(index) else { return .none }
                 state.session.activeFileIndex = index
-                state.navigation = CodeReviewNavigationState(
-                    changes: CodeReviewChangeNavigation.changes(in: state.session.files[index])
-                )
+                state.syncNavigationToActiveFile()
+                state.selectedLine = nil
+                state.commentText = ""
                 return .none
 
             case .selectLine(let line):
@@ -175,6 +270,11 @@ public struct CodeReviewFlowFeature: Sendable {
                 state.commentText = state.session.comments.first {
                     $0.fileID == line.fileID && $0.startLine == line.lineNumber
                 }?.text ?? ""
+                return .none
+
+            case .cancelCommentButtonTapped:
+                state.selectedLine = nil
+                state.commentText = ""
                 return .none
 
             case .commentTextChanged(let text):
@@ -207,6 +307,12 @@ public struct CodeReviewFlowFeature: Sendable {
                         )
                     )
                 }
+                state.selectedLine = nil
+                state.commentText = ""
+                return .none
+
+            case .deleteCommentButtonTapped(let id):
+                state.session.comments.removeAll { $0.id == id }
                 state.selectedLine = nil
                 state.commentText = ""
                 return .none

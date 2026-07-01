@@ -39,7 +39,7 @@ public struct MainWindow: View {
 
                 if store.isBoardVisible, let workspace = store.activeWorkspace {
                     BoardPanel(store: store, items: workspace.boardItems)
-                        .frame(width: 340)
+                        .frame(width: 380)
                         .transition(.move(edge: .trailing))
                         .shadow(radius: 10)
                 }

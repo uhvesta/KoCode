@@ -3,3 +3,5 @@
 DerivedData/
 *.xcodeproj
 xcuserdata/
+**/__Snapshots__/
+GhosttyKit.xcframework/

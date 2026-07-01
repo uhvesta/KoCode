@@ -63,7 +63,11 @@ let package = Package(
         ),
         .testTarget(
             name: "AvestaCoreTests",
-            dependencies: ["AvestaCore"]
+            dependencies: [
+                "AvestaCore",
+                .product(name: "SnapshotTesting", package: "swift-snapshot-testing")
+            ],
+            exclude: ["__Snapshots__"]
         ),
         .testTarget(
             name: "AvestaNotificationsTests",

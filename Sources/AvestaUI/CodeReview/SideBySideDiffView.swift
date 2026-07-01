@@ -6,47 +6,41 @@ struct SideBySideDiffView: View {
     let navigation: CodeReviewNavigationState
     let previousChange: () -> Void
     let nextChange: () -> Void
+    var selectedLine: CodeReviewFlowFeature.PendingLine? = nil
+    var commentText = ""
     var onSelectLine: (FileDiff, DiffLine) -> Void = { _, _ in }
-    @State private var mode: CodeReviewDisplayMode = .file
+    var onCommentTextChanged: (String) -> Void = { _ in }
+    var onSaveComment: () -> Void = {}
+    var onCancelComment: () -> Void = {}
+    var onDeleteComment: (UUID) -> Void = { _ in }
 
     var body: some View {
         if let file = session.activeFile {
             VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    Text(file.path)
-                        .font(.headline)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-
-                    Spacer()
-
-                    Picker("Display Mode", selection: $mode) {
-                        ForEach(CodeReviewDisplayMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 170)
-                }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 12)
-                .background(Color(nsColor: .controlBackgroundColor).opacity(0.35))
-
+                fileHeader(file: file)
                 Divider()
 
-                switch mode {
-                case .diff:
-                    diffBody(file: file)
+                switch session.diffMode {
                 case .file:
                     FullFileView(
                         session: session,
                         file: file,
+                        gitFile: gitFile(for: file),
                         navigation: navigation,
                         previousChange: previousChange,
                         nextChange: nextChange,
-                        onSelectLine: onSelectLine
+                        selectedLine: selectedLine,
+                        commentText: commentText,
+                        onSelectLine: onSelectLine,
+                        onCommentTextChanged: onCommentTextChanged,
+                        onSaveComment: onSaveComment,
+                        onCancelComment: onCancelComment,
+                        onDeleteComment: onDeleteComment
                     )
+                case .unified:
+                    unifiedBody(file: file)
+                case .split:
+                    splitBody(file: file)
                 }
             }
         } else {
@@ -54,19 +48,47 @@ struct SideBySideDiffView: View {
         }
     }
 
-    private func diffBody(file: FileDiff) -> some View {
+    private func fileHeader(file: FileDiff) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon(for: file.status))
+                .foregroundStyle(.secondary)
+            Text(file.path)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer()
+
+            Text(summary(for: file))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.35))
+    }
+
+    private func unifiedBody(file: FileDiff) -> some View {
         GeometryReader { proxy in
             ScrollView([.vertical, .horizontal]) {
-                VStack(alignment: .leading, spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(file.hunks) { hunk in
                         VStack(alignment: .leading, spacing: 0) {
-                            Text("@@ -\(hunk.oldStart),\(hunk.oldCount) +\(hunk.newStart),\(hunk.newCount) @@")
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal)
-                                .padding(.vertical, 6)
-
-                            diffPane(for: file, hunk: hunk, minWidth: proxy.size.width)
+                            hunkHeader(hunk)
+                            ForEach(hunk.lines) { line in
+                                VStack(alignment: .leading, spacing: 0) {
+                                    DiffLineView(
+                                        line: line,
+                                        side: line.kind == .removed ? .old : .new,
+                                        filePath: file.path,
+                                        isFocused: isFocused(line),
+                                        isLastTurnChange: isLastTurn(line, in: file),
+                                        showsAddComment: isCommentable(line, in: file),
+                                        addComment: { onSelectLine(file, line) }
+                                    )
+                                    inlineContent(after: line, in: file)
+                                }
+                            }
                         }
                     }
 
@@ -83,62 +105,163 @@ struct SideBySideDiffView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    @ViewBuilder
-    private func diffPane(for file: FileDiff, hunk: DiffHunk, minWidth: CGFloat) -> some View {
-        switch file.status {
-        case .added:
-            DiffPane(lines: hunk.lines, side: .new, file: file, onSelectLine: onSelectLine)
-                .frame(minWidth: minWidth, alignment: .leading)
-        case .deleted:
-            DiffPane(lines: hunk.lines, side: .old)
-                .frame(minWidth: minWidth, alignment: .leading)
-        case .modified, .renamed:
-            HStack(alignment: .top, spacing: 0) {
-                DiffPane(lines: hunk.lines, side: .old)
-                Divider()
-                DiffPane(lines: hunk.lines, side: .new, file: file, onSelectLine: onSelectLine)
+    private func splitBody(file: FileDiff) -> some View {
+        GeometryReader { proxy in
+            ScrollView([.vertical, .horizontal]) {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(file.hunks) { hunk in
+                        VStack(alignment: .leading, spacing: 0) {
+                            hunkHeader(hunk)
+                            splitPane(for: file, hunk: hunk, minWidth: proxy.size.width)
+                        }
+                    }
+
+                    if file.hunks.isEmpty {
+                        ContentUnavailableView("No Hunks", systemImage: "doc.text")
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                    }
+                }
+                .padding(.vertical)
+                .frame(minWidth: proxy.size.width, minHeight: proxy.size.height, alignment: .topLeading)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func splitPane(for file: FileDiff, hunk: DiffHunk, minWidth: CGFloat) -> some View {
+        Group {
+            switch file.status {
+            case .added:
+                DiffPane(
+                    lines: hunk.lines,
+                    side: .new,
+                    file: file,
+                    session: session,
+                    navigation: navigation,
+                    selectedLine: selectedLine,
+                    commentText: commentText,
+                    onSelectLine: onSelectLine,
+                    onCommentTextChanged: onCommentTextChanged,
+                    onSaveComment: onSaveComment,
+                    onCancelComment: onCancelComment,
+                    onDeleteComment: onDeleteComment
+                )
+            case .deleted:
+                DiffPane(lines: hunk.lines, side: .old, file: nil, session: session, navigation: navigation)
+            case .modified, .renamed:
+                HStack(alignment: .top, spacing: 0) {
+                    DiffPane(lines: hunk.lines, side: .old, file: nil, session: session, navigation: navigation)
+                    Divider()
+                    DiffPane(
+                        lines: hunk.lines,
+                        side: .new,
+                        file: file,
+                        session: session,
+                        navigation: navigation,
+                        selectedLine: selectedLine,
+                        commentText: commentText,
+                        onSelectLine: onSelectLine,
+                        onCommentTextChanged: onCommentTextChanged,
+                        onSaveComment: onSaveComment,
+                        onCancelComment: onCancelComment,
+                        onDeleteComment: onDeleteComment
+                    )
+                }
             }
         }
+        .frame(minWidth: minWidth, alignment: .leading)
     }
-}
 
-private enum CodeReviewDisplayMode: String, CaseIterable, Identifiable {
-    case file
-    case diff
+    private func hunkHeader(_ hunk: DiffHunk) -> some View {
+        Text("@@ -\(hunk.oldStart),\(hunk.oldCount) +\(hunk.newStart),\(hunk.newCount) @@")
+            .font(.caption.monospaced())
+            .foregroundStyle(.secondary)
+            .padding(.horizontal)
+            .padding(.vertical, 6)
+    }
 
-    var id: String { rawValue }
+    private func inlineContent(after line: DiffLine, in file: FileDiff) -> some View {
+        InlineCommentStack(
+            comments: comments(for: line, in: file),
+            selectedLine: selectedLine,
+            file: file,
+            line: line,
+            commentText: commentText,
+            onCommentTextChanged: onCommentTextChanged,
+            onSaveComment: onSaveComment,
+            onCancelComment: onCancelComment,
+            onSelectLine: onSelectLine,
+            onDeleteComment: onDeleteComment
+        )
+    }
 
-    var title: String {
-        switch self {
-        case .file: return "File"
-        case .diff: return "Diff"
+    private func comments(for line: DiffLine, in file: FileDiff) -> [ReviewComment] {
+        guard let lineNumber = line.newLineNumber,
+              file.changedNewLineNumbers.contains(lineNumber)
+        else { return [] }
+        return session.comments
+            .filter { $0.fileID == file.id && $0.startLine == lineNumber }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+
+    private func isFocused(_ line: DiffLine) -> Bool {
+        guard let lineNumber = line.newLineNumber,
+              let focused = navigation.focusedChange
+        else { return false }
+        return focused.startLine...focused.endLine ~= lineNumber
+    }
+
+    private func isLastTurn(_ line: DiffLine, in file: FileDiff) -> Bool {
+        guard session.scope == .lastTurnChanges,
+              let lineNumber = line.newLineNumber
+        else { return false }
+        return file.changedNewLineNumbers.contains(lineNumber)
+    }
+
+    private func isCommentable(_ line: DiffLine, in file: FileDiff) -> Bool {
+        guard let lineNumber = line.newLineNumber,
+              line.kind == .added
+        else { return false }
+        return file.changedNewLineNumbers.contains(lineNumber)
+    }
+
+    private func gitFile(for file: FileDiff) -> FileDiff? {
+        guard session.scope == .lastTurnChanges else { return file }
+        return session.files.first { $0.path == file.path }
+    }
+
+    private func icon(for status: FileStatus) -> String {
+        switch status {
+        case .added: return "plus.circle"
+        case .modified: return "circle"
+        case .deleted: return "minus.circle"
+        case .renamed: return "arrow.right.circle"
         }
+    }
+
+    private func summary(for file: FileDiff) -> String {
+        if file.status == .added {
+            return "Added +\(file.addedLineCount)"
+        }
+        return "+\(file.addedLineCount)  -\(file.removedLineCount)"
     }
 }
 
 private struct FullFileView: View {
     let session: CodeReviewFlowFeature.CodeReviewSessionState
     let file: FileDiff
+    let gitFile: FileDiff?
     let navigation: CodeReviewNavigationState
     let previousChange: () -> Void
     let nextChange: () -> Void
+    let selectedLine: CodeReviewFlowFeature.PendingLine?
+    let commentText: String
     var onSelectLine: (FileDiff, DiffLine) -> Void
-
-    init(
-        session: CodeReviewFlowFeature.CodeReviewSessionState,
-        file: FileDiff,
-        navigation: CodeReviewNavigationState,
-        previousChange: @escaping () -> Void,
-        nextChange: @escaping () -> Void,
-        onSelectLine: @escaping (FileDiff, DiffLine) -> Void
-    ) {
-        self.session = session
-        self.file = file
-        self.navigation = navigation
-        self.previousChange = previousChange
-        self.nextChange = nextChange
-        self.onSelectLine = onSelectLine
-    }
+    var onCommentTextChanged: (String) -> Void
+    var onSaveComment: () -> Void
+    var onCancelComment: () -> Void
+    var onDeleteComment: (UUID) -> Void
 
     var body: some View {
         GeometryReader { proxy in
@@ -151,20 +274,38 @@ private struct FullFileView: View {
                         ScrollView([.vertical, .horizontal]) {
                             LazyVStack(alignment: .leading, spacing: 0) {
                                 ForEach(display.lines) { line in
-                                    FullFileLineView(
-                                        line: line,
-                                        isFocused: display.focusedLineNumbers(for: navigation.focusedChangeIndex).contains(line.number)
-                                    )
-                                    .id(line.number)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        let diffLine = DiffLine(
-                                            kind: line.kind ?? .context,
-                                            oldLineNumber: nil,
-                                            newLineNumber: line.number,
-                                            content: line.plainContent
+                                    VStack(alignment: .leading, spacing: 0) {
+                                        FullFileLineView(
+                                            line: line,
+                                            showsAddComment: line.isActiveScopeChange,
+                                            addComment: {
+                                                onSelectLine(file, DiffLine(
+                                                    kind: line.kind ?? .context,
+                                                    oldLineNumber: nil,
+                                                    newLineNumber: line.number,
+                                                    content: line.plainContent
+                                                ))
+                                            }
                                         )
-                                        onSelectLine(file, diffLine)
+                                        .id(line.number)
+
+                                        InlineCommentStack(
+                                            comments: comments(for: line),
+                                            selectedLine: selectedLine,
+                                            file: file,
+                                            line: DiffLine(
+                                                kind: line.kind ?? .context,
+                                                oldLineNumber: nil,
+                                                newLineNumber: line.number,
+                                                content: line.plainContent
+                                            ),
+                                            commentText: commentText,
+                                            onCommentTextChanged: onCommentTextChanged,
+                                            onSaveComment: onSaveComment,
+                                            onCancelComment: onCancelComment,
+                                            onSelectLine: onSelectLine,
+                                            onDeleteComment: onDeleteComment
+                                        )
                                     }
                                 }
                             }
@@ -191,7 +332,8 @@ private struct FullFileView: View {
             Button {
                 previousChange()
             } label: {
-                Label("Previous", systemImage: "chevron.up")
+                Image(systemName: "chevron.up")
+                    .frame(width: 22, height: 22)
             }
             .accessibilityLabel("Previous Change")
             .help("Previous Change")
@@ -200,26 +342,30 @@ private struct FullFileView: View {
             Button {
                 nextChange()
             } label: {
-                Label("Next", systemImage: "chevron.down")
+                Image(systemName: "chevron.down")
+                    .frame(width: 22, height: 22)
             }
             .accessibilityLabel("Next Change")
             .help("Next Change")
             .disabled(display.changes.isEmpty || navigation.focusedChangeIndex >= display.changes.count - 1)
 
-            Text(changeStatus(display: display))
+            Text(display.changes.isEmpty ? "No changes in file" : navigation.statusText)
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             Spacer()
         }
-        .buttonStyle(.borderless)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
+        .buttonStyle(.plain)
+        .controlSize(.small)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 
-    private func changeStatus(display: FullFileDisplay) -> String {
-        guard !display.changes.isEmpty else { return "No changes in file" }
-        return navigation.statusText
+    private func comments(for line: FullFileLine) -> [ReviewComment] {
+        guard line.isActiveScopeChange else { return [] }
+        return session.comments
+            .filter { $0.fileID == file.id && $0.startLine == line.number }
+            .sorted { $0.createdAt < $1.createdAt }
     }
 
     private func scrollToFocusedChange(display: FullFileDisplay, proxy: ScrollViewProxy) {
@@ -239,33 +385,42 @@ private struct FullFileView: View {
             : URL(fileURLWithPath: session.repoPath.path, isDirectory: true)
         let url = repoURL.appendingPathComponent(file.path, isDirectory: false)
         guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+
+        let gitChangeFile = gitFile ?? file
         var changedLines: [Int: DiffLineKind] = [:]
-        for line in file.hunks.flatMap(\.lines) {
+        for line in gitChangeFile.hunks.flatMap(\.lines) {
             guard let number = line.newLineNumber else { continue }
             changedLines[number] = line.kind
         }
+
+        let activeScopeLines = file.changedNewLineNumbers
         let highlightedLines = SwiftSyntaxHighlighter.highlightedLines(for: content, path: file.path)
-        let lines = highlightedLines.map { line in
-            let plainContent = String(line.content.characters)
+        let lines = highlightedLines.map { highlightedLine in
+            let lineNumber = highlightedLine.lineNumber
+            let plainContent = String(highlightedLine.content.characters)
+            let kind = changedLines[lineNumber]
             return FullFileLine(
-                number: line.lineNumber,
-                content: plainContent.isEmpty ? AttributedString(" ") : line.content,
+                number: lineNumber,
+                content: plainContent.isEmpty ? AttributedString(" ") : highlightedLine.content,
                 plainContent: plainContent,
-                kind: changedLines[line.lineNumber]
+                kind: kind,
+                isFocused: displayFocus(for: lineNumber),
+                isLastTurnChange: session.scope == .lastTurnChanges && activeScopeLines.contains(lineNumber),
+                isActiveScopeChange: activeScopeLines.contains(lineNumber)
             )
         }
         return FullFileDisplay(lines: lines, changes: CodeReviewChangeNavigation.changes(in: file))
+    }
+
+    private func displayFocus(for lineNumber: Int) -> Bool {
+        guard let focused = navigation.focusedChange else { return false }
+        return focused.startLine...focused.endLine ~= lineNumber
     }
 }
 
 private struct FullFileDisplay {
     let lines: [FullFileLine]
     let changes: [CodeReviewChangeRange]
-
-    func focusedLineNumbers(for index: Int) -> Set<Int> {
-        guard changes.indices.contains(index) else { return [] }
-        return Set(changes[index].startLine...changes[index].endLine)
-    }
 }
 
 private struct FullFileLine: Identifiable {
@@ -273,48 +428,63 @@ private struct FullFileLine: Identifiable {
     let content: AttributedString
     let plainContent: String
     let kind: DiffLineKind?
+    let isFocused: Bool
+    let isLastTurnChange: Bool
+    let isActiveScopeChange: Bool
 
     var id: Int { number }
 }
 
 private struct FullFileLineView: View {
     let line: FullFileLine
-    let isFocused: Bool
+    var showsAddComment = false
+    var addComment: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 0) {
             Text(String(line.number))
-                .font(.caption.monospacedDigit())
+                .font(.custom("Menlo", size: 11))
                 .foregroundStyle(.secondary)
-                .frame(width: 58, alignment: .trailing)
+                .frame(width: 48, alignment: .trailing)
                 .padding(.trailing, 10)
 
             Text(line.content)
-                .font(.system(.body, design: .monospaced))
+                .font(.custom("Menlo", size: 12))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            if showsAddComment {
+                Button(action: addComment) {
+                    Image(systemName: "plus.bubble")
+                        .imageScale(.small)
+                }
+                .buttonStyle(.borderless)
+                .help("Add comment")
+                .accessibilityLabel("Add Comment")
+                .padding(.leading, 8)
+            }
         }
         .padding(.vertical, 2)
         .padding(.trailing, 12)
         .background(background)
         .overlay(alignment: .leading) {
-            if isFocused {
+            if line.isFocused || line.isLastTurnChange {
                 Rectangle()
-                    .fill(Color.accentColor)
+                    .fill(line.isFocused ? Color.accentColor : Color.orange.opacity(0.85))
                     .frame(width: 3)
             }
         }
     }
 
     private var background: Color {
-        if isFocused {
-            return Color.accentColor.opacity(0.18)
+        if line.isLastTurnChange {
+            return Color(red: 0.16, green: 0.11, blue: 0.04)
         }
         switch line.kind {
         case .added:
-            return Color.green.opacity(0.14)
+            return Color(red: 0.04, green: 0.12, blue: 0.07)
         case .removed:
-            return Color.red.opacity(0.14)
+            return Color(red: 0.15, green: 0.06, blue: 0.06)
         case .context, nil:
             return .clear
         }
@@ -325,17 +495,47 @@ private struct DiffPane: View {
     let lines: [DiffLine]
     let side: DiffSide
     var file: FileDiff?
+    let session: CodeReviewFlowFeature.CodeReviewSessionState
+    let navigation: CodeReviewNavigationState
+    var selectedLine: CodeReviewFlowFeature.PendingLine?
+    var commentText = ""
     var onSelectLine: (FileDiff, DiffLine) -> Void = { _, _ in }
+    var onCommentTextChanged: (String) -> Void = { _ in }
+    var onSaveComment: () -> Void = {}
+    var onCancelComment: () -> Void = {}
+    var onDeleteComment: (UUID) -> Void = { _ in }
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(linesForSide) { line in
-                DiffLineView(line: line, side: side, filePath: file?.path)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        guard side == .new, let file, line.newLineNumber != nil else { return }
-                        onSelectLine(file, line)
+                VStack(alignment: .leading, spacing: 0) {
+                    DiffLineView(
+                        line: line,
+                        side: side,
+                        filePath: file?.path,
+                        isFocused: isFocused(line),
+                        isLastTurnChange: isLastTurn(line),
+                        showsAddComment: isCommentable(line),
+                        addComment: {
+                            guard let file else { return }
+                            onSelectLine(file, line)
+                        }
+                    )
+                    if let file {
+                        InlineCommentStack(
+                            comments: comments(for: line, in: file),
+                            selectedLine: selectedLine,
+                            file: file,
+                            line: line,
+                            commentText: commentText,
+                            onCommentTextChanged: onCommentTextChanged,
+                            onSaveComment: onSaveComment,
+                            onCancelComment: onCancelComment,
+                            onSelectLine: onSelectLine,
+                            onDeleteComment: onDeleteComment
+                        )
                     }
+                }
             }
         }
         .frame(minWidth: 360, alignment: .leading)
@@ -350,5 +550,154 @@ private struct DiffPane: View {
                 line.kind != .removed
             }
         }
+    }
+
+    private func isFocused(_ line: DiffLine) -> Bool {
+        guard side == .new,
+              let lineNumber = line.newLineNumber,
+              let focused = navigation.focusedChange
+        else { return false }
+        return focused.startLine...focused.endLine ~= lineNumber
+    }
+
+    private func isLastTurn(_ line: DiffLine) -> Bool {
+        guard side == .new,
+              session.scope == .lastTurnChanges,
+              let file,
+              let lineNumber = line.newLineNumber
+        else { return false }
+        return file.changedNewLineNumbers.contains(lineNumber)
+    }
+
+    private func isCommentable(_ line: DiffLine) -> Bool {
+        guard side == .new,
+              let file,
+              let lineNumber = line.newLineNumber,
+              line.kind == .added
+        else { return false }
+        return file.changedNewLineNumbers.contains(lineNumber)
+    }
+
+    private func comments(for line: DiffLine, in file: FileDiff) -> [ReviewComment] {
+        guard let lineNumber = line.newLineNumber,
+              file.changedNewLineNumbers.contains(lineNumber)
+        else { return [] }
+        return session.comments
+            .filter { $0.fileID == file.id && $0.startLine == lineNumber }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+}
+
+private struct InlineCommentStack: View {
+    let comments: [ReviewComment]
+    let selectedLine: CodeReviewFlowFeature.PendingLine?
+    let file: FileDiff
+    let line: DiffLine
+    let commentText: String
+    var onCommentTextChanged: (String) -> Void
+    var onSaveComment: () -> Void
+    var onCancelComment: () -> Void
+    var onSelectLine: (FileDiff, DiffLine) -> Void
+    var onDeleteComment: (UUID) -> Void
+
+    var body: some View {
+        if !comments.isEmpty || isEditingLine {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(comments) { comment in
+                    InlineCommentCard(
+                        comment: comment,
+                        edit: { onSelectLine(file, line) },
+                        delete: { onDeleteComment(comment.id) }
+                    )
+                }
+
+                if isEditingLine {
+                    InlineCommentEditor(
+                        text: commentText,
+                        lineNumber: line.newLineNumber ?? 0,
+                        textChanged: onCommentTextChanged,
+                        save: onSaveComment,
+                        cancel: onCancelComment
+                    )
+                }
+            }
+            .padding(.leading, 68)
+            .padding(.vertical, 8)
+            .frame(maxWidth: 760, alignment: .leading)
+        }
+    }
+
+    private var isEditingLine: Bool {
+        guard let selectedLine,
+              let lineNumber = line.newLineNumber
+        else { return false }
+        return selectedLine.fileID == file.id && selectedLine.lineNumber == lineNumber
+    }
+}
+
+private struct InlineCommentEditor: View {
+    let text: String
+    let lineNumber: Int
+    var textChanged: (String) -> Void
+    var save: () -> Void
+    var cancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            TextEditor(text: Binding(get: { text }, set: textChanged))
+                .font(.body)
+                .frame(height: 92)
+                .accessibilityLabel("Comment Text")
+                .accessibilityIdentifier("code-review-comment-text")
+                .padding(6)
+
+            Divider()
+
+            HStack(spacing: 10) {
+                Text("Commenting on line \(lineNumber)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel", action: cancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Comment", action: save)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+        }
+        .background(Color(nsColor: .textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(.separator)
+        }
+    }
+}
+
+private struct InlineCommentCard: View {
+    let comment: ReviewComment
+    var edit: () -> Void
+    var delete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("You")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Button("Edit", action: edit)
+                Button("Delete", action: delete)
+            }
+            .buttonStyle(.borderless)
+
+            Text(comment.text)
+                .font(.body)
+                .textSelection(.enabled)
+        }
+        .padding(10)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.75))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }

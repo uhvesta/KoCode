@@ -35,6 +35,37 @@ final class GitServiceTests: XCTestCase {
         try await service.removeWorktree(bareRepo: bare, worktreePath: worktree)
     }
 
+    func testWorkingTreeAndCheckpointDiffsIncludeLastTurnOnly() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "AvestaCodeGitCheckpointTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try run(["git", "init", "-b", "main"], cwd: root)
+        try "one\n".write(to: root.appending(path: "file.txt"), atomically: true, encoding: .utf8)
+        try run(["git", "add", "file.txt"], cwd: root)
+        try run(["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "initial"], cwd: root)
+
+        try "one\ntwo\n".write(to: root.appending(path: "file.txt"), atomically: true, encoding: .utf8)
+        try "first draft\n".write(to: root.appending(path: "notes.txt"), atomically: true, encoding: .utf8)
+
+        let service = GitService()
+        let gitChanges = try await service.workingTreeDiff(repoPath: root)
+        XCTAssertEqual(gitChanges.map(\.path).sorted(), ["file.txt", "notes.txt"])
+
+        let checkpointDate = Date(timeIntervalSince1970: 1_782_835_200)
+        let checkpoint = try await service.reviewCheckpoint(repoPath: root, createdAt: checkpointDate)
+        XCTAssertEqual(checkpoint.createdAt, checkpointDate)
+
+        try "one\ntwo\nthree\n".write(to: root.appending(path: "file.txt"), atomically: true, encoding: .utf8)
+        try "after checkpoint\n".write(to: root.appending(path: "later.txt"), atomically: true, encoding: .utf8)
+
+        let lastTurn = try await service.diff(repoPath: root, since: checkpoint)
+        XCTAssertEqual(lastTurn.map(\.path).sorted(), ["file.txt", "later.txt"])
+        XCTAssertFalse(lastTurn.contains { $0.path == "notes.txt" })
+        XCTAssertEqual(lastTurn.first { $0.path == "file.txt" }?.addedLineCount, 1)
+    }
+
     private func run(_ args: [String], cwd: URL) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")

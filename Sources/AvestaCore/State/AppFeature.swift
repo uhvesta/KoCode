@@ -22,6 +22,11 @@ public enum CodeReviewDiffLoadResult: Equatable, Sendable {
     case failure(String)
 }
 
+public enum CodeReviewCheckpointLoadResult: Equatable, Sendable {
+    case success(ReviewCheckpoint)
+    case failure(String)
+}
+
 @Reducer
 public struct AppFeature: Sendable {
     private let config: AppConfig
@@ -199,7 +204,7 @@ public struct AppFeature: Sendable {
         public var title: String {
             switch self {
             case .terminal(let tab): return tab.title
-            case .codeReview(let tab): return tab.title
+            case .codeReview(let tab): return tab.displayTitle
             }
         }
 
@@ -238,8 +243,14 @@ public struct AppFeature: Sendable {
                             diffSpec: $0.session.diffSpec,
                             repoPath: $0.session.repoPath,
                             files: $0.session.files,
+                            lastTurnFiles: $0.session.lastTurnFiles,
                             activeFileIndex: $0.session.activeFileIndex,
-                            comments: $0.session.comments
+                            comments: $0.session.comments,
+                            scope: $0.session.scope,
+                            diffMode: $0.session.diffMode,
+                            checkpoint: $0.session.checkpoint,
+                            gitChangesError: $0.session.gitChangesError,
+                            lastTurnError: $0.session.lastTurnError
                         )
                     }
                 ))
@@ -296,6 +307,11 @@ public struct AppFeature: Sendable {
             self.flow = flow
         }
 
+        public var displayTitle: String {
+            guard let flow else { return "Review 0" }
+            return "Review \(flow.session.activeFileCount)"
+        }
+
         public init(snapshot: CodeReviewTabSnapshot) {
             self.init(
                 id: snapshot.id,
@@ -304,14 +320,20 @@ public struct AppFeature: Sendable {
                     CodeReviewFlowFeature.State(
                         session: CodeReviewFlowFeature.CodeReviewSessionState(
                             id: $0.id,
-                            diffSpec: $0.diffSpec,
-                            repoPath: $0.repoPath,
-                            files: $0.files,
-                            activeFileIndex: $0.activeFileIndex,
-                            comments: $0.comments
-                        )
-                    )
-                }
+	                            diffSpec: $0.diffSpec,
+	                            repoPath: $0.repoPath,
+	                            files: $0.files,
+                                lastTurnFiles: $0.lastTurnFiles,
+	                            activeFileIndex: $0.activeFileIndex,
+	                            comments: $0.comments,
+                                scope: $0.scope,
+                                diffMode: $0.diffMode,
+                                checkpoint: $0.checkpoint,
+                                gitChangesError: $0.gitChangesError,
+                                lastTurnError: $0.lastTurnError
+	                        )
+	                    )
+	                }
             )
         }
     }
@@ -333,6 +355,12 @@ public struct AppFeature: Sendable {
         case clearBadge(tabID: UUID)
         case notifyInApp(id: UUID, title: String, body: String, tabID: UUID, createdAt: Date)
         case codeReview(tabID: UUID, CodeReviewFlowFeature.Action)
+        case codeReviewLoadGitChanges(tabID: UUID, repoID: UUID?)
+        case codeReviewGitChangesLoaded(tabID: UUID, repoPath: URL, CodeReviewDiffLoadResult)
+        case codeReviewSelectScope(tabID: UUID, CodeReviewScope)
+        case codeReviewLastTurnLoaded(tabID: UUID, CodeReviewDiffLoadResult)
+        case codeReviewMarkReviewed(tabID: UUID, now: Date)
+        case codeReviewCheckpointLoaded(tabID: UUID, CodeReviewCheckpointLoadResult)
         case codeReviewLoadDiff(tabID: UUID, repoID: UUID?, diffSpec: String)
         case codeReviewDiffLoaded(tabID: UUID, repoPath: URL, diffSpec: String, CodeReviewDiffLoadResult)
         case newWorkspace(NewWorkspaceFeature.Action)
@@ -478,10 +506,14 @@ public struct AppFeature: Sendable {
                     else { continue }
                     _ = CodeReviewFlowFeature().reduce(into: &flow, action: action)
                     tab.flow = flow
-                    if case .sendReviewToBoardButtonTapped(let id, let now) = action,
-                       let item = flow.boardItems.first(where: { $0.id == id }) {
+                    let boardExport: (id: UUID, now: Date)? = switch action {
+                    case .sendReviewToBoardButtonTapped(let id, let now): (id, now)
+                    default: nil
+                    }
+                    if let boardExport,
+                       let item = flow.boardItems.first(where: { $0.id == boardExport.id }) {
                         state.workspaces[workspaceIndex].boardItems.insert(
-                            BoardItem(id: item.id, content: item.content, source: item.source, createdAt: now),
+                            BoardItem(id: item.id, content: item.content, source: item.source, createdAt: boardExport.now),
                             at: 0
                         )
                     }
@@ -489,6 +521,179 @@ public struct AppFeature: Sendable {
                     return .send(.persistSession)
                 }
                 return .none
+
+            case let .codeReviewLoadGitChanges(tabID, repoID):
+                guard let workspace = state.activeWorkspace,
+                      let repo = repoID.flatMap({ id in workspace.repos.first { $0.id == id } }) ?? workspace.repos.first
+                else { return .none }
+                state.lastErrorMessage = nil
+                return .run { send in
+                    do {
+                        let files = try await gitService.workingTreeDiff(repoPath: repo.worktreePath)
+                        await send(.codeReviewGitChangesLoaded(tabID: tabID, repoPath: repo.worktreePath, .success(files)))
+                    } catch {
+                        await send(.codeReviewGitChangesLoaded(tabID: tabID, repoPath: repo.worktreePath, .failure(error.localizedDescription)))
+                    }
+                }
+
+            case let .codeReviewGitChangesLoaded(tabID, repoPath, result):
+                switch result {
+                case .success(let files):
+                    for workspaceIndex in state.workspaces.indices {
+                        guard let tabIndex = state.workspaces[workspaceIndex].tabs.firstIndex(where: { $0.id == tabID }),
+                              case .codeReview(var tab) = state.workspaces[workspaceIndex].tabs[tabIndex]
+                        else { continue }
+                        if var flow = tab.flow {
+                            flow.session.diffSpec = "Working tree"
+                            flow.session.repoPath = repoPath
+                            flow.session.replaceGitFiles(files)
+                            flow.session.gitChangesError = nil
+                            flow.syncNavigationToActiveFile()
+                            tab.flow = flow
+                        } else {
+                            tab.flow = CodeReviewFlowFeature.State(
+                                session: CodeReviewFlowFeature.CodeReviewSessionState(
+                                    diffSpec: "Working tree",
+                                    repoPath: repoPath,
+                                    files: files
+                                )
+                            )
+                        }
+                        state.workspaces[workspaceIndex].tabs[tabIndex] = .codeReview(tab)
+                        state.lastErrorMessage = nil
+                        return .send(.persistSession)
+                    }
+                    return .none
+                case .failure(let message):
+                    for workspaceIndex in state.workspaces.indices {
+                        guard let tabIndex = state.workspaces[workspaceIndex].tabs.firstIndex(where: { $0.id == tabID }),
+                              case .codeReview(var tab) = state.workspaces[workspaceIndex].tabs[tabIndex],
+                              var flow = tab.flow
+                        else { continue }
+                        flow.session.gitChangesError = message
+                        tab.flow = flow
+                        state.workspaces[workspaceIndex].tabs[tabIndex] = .codeReview(tab)
+                        break
+                    }
+                    state.lastErrorMessage = message
+                    return .none
+                }
+
+            case let .codeReviewSelectScope(tabID, scope):
+                var checkpoint: ReviewCheckpoint?
+                var repoPath: URL?
+                for workspaceIndex in state.workspaces.indices {
+                    guard let tabIndex = state.workspaces[workspaceIndex].tabs.firstIndex(where: { $0.id == tabID }),
+                          case .codeReview(var tab) = state.workspaces[workspaceIndex].tabs[tabIndex],
+                          var flow = tab.flow
+                    else { continue }
+                    _ = CodeReviewFlowFeature().reduce(into: &flow, action: .scopeSelected(scope))
+                    checkpoint = flow.session.checkpoint
+                    repoPath = flow.session.repoPath
+                    tab.flow = flow
+                    state.workspaces[workspaceIndex].tabs[tabIndex] = .codeReview(tab)
+                    break
+                }
+
+                guard scope == .lastTurnChanges, let checkpoint, let repoPath else {
+                    return .send(.persistSession)
+                }
+                return .merge(
+                    .send(.persistSession),
+                    .run { send in
+                        do {
+                            let files = try await gitService.diff(repoPath: repoPath, since: checkpoint)
+                            await send(.codeReviewLastTurnLoaded(tabID: tabID, .success(files)))
+                        } catch {
+                            await send(.codeReviewLastTurnLoaded(tabID: tabID, .failure(error.localizedDescription)))
+                        }
+                    }
+                )
+
+            case let .codeReviewLastTurnLoaded(tabID, result):
+                switch result {
+                case .success(let files):
+                    for workspaceIndex in state.workspaces.indices {
+                        guard let tabIndex = state.workspaces[workspaceIndex].tabs.firstIndex(where: { $0.id == tabID }),
+                              case .codeReview(var tab) = state.workspaces[workspaceIndex].tabs[tabIndex],
+                              var flow = tab.flow
+                        else { continue }
+                        flow.session.replaceLastTurnFiles(files)
+                        flow.session.lastTurnError = nil
+                        flow.syncNavigationToActiveFile()
+                        tab.flow = flow
+                        state.workspaces[workspaceIndex].tabs[tabIndex] = .codeReview(tab)
+                        state.lastErrorMessage = nil
+                        return .send(.persistSession)
+                    }
+                    return .none
+                case .failure(let message):
+                    for workspaceIndex in state.workspaces.indices {
+                        guard let tabIndex = state.workspaces[workspaceIndex].tabs.firstIndex(where: { $0.id == tabID }),
+                              case .codeReview(var tab) = state.workspaces[workspaceIndex].tabs[tabIndex],
+                              var flow = tab.flow
+                        else { continue }
+                        flow.session.lastTurnError = message
+                        tab.flow = flow
+                        state.workspaces[workspaceIndex].tabs[tabIndex] = .codeReview(tab)
+                        break
+                    }
+                    state.lastErrorMessage = message
+                    return .none
+                }
+
+            case let .codeReviewMarkReviewed(tabID, now):
+                var repoPath: URL?
+                for workspace in state.workspaces {
+                    guard let tab = workspace.tabs.first(where: { $0.id == tabID }),
+                          case .codeReview(let review) = tab,
+                          let flow = review.flow
+                    else { continue }
+                    repoPath = flow.session.repoPath
+                    break
+                }
+                guard let repoPath else { return .none }
+                return .run { send in
+                    do {
+                        let checkpoint = try await gitService.reviewCheckpoint(repoPath: repoPath, createdAt: now)
+                        await send(.codeReviewCheckpointLoaded(tabID: tabID, .success(checkpoint)))
+                    } catch {
+                        await send(.codeReviewCheckpointLoaded(tabID: tabID, .failure(error.localizedDescription)))
+                    }
+                }
+
+            case let .codeReviewCheckpointLoaded(tabID, result):
+                switch result {
+                case .success(let checkpoint):
+                    for workspaceIndex in state.workspaces.indices {
+                        guard let tabIndex = state.workspaces[workspaceIndex].tabs.firstIndex(where: { $0.id == tabID }),
+                              case .codeReview(var tab) = state.workspaces[workspaceIndex].tabs[tabIndex],
+                              var flow = tab.flow
+                        else { continue }
+                        flow.session.checkpoint = checkpoint
+                        flow.session.replaceLastTurnFiles([])
+                        flow.session.lastTurnError = nil
+                        flow.syncNavigationToActiveFile()
+                        tab.flow = flow
+                        state.workspaces[workspaceIndex].tabs[tabIndex] = .codeReview(tab)
+                        state.lastErrorMessage = nil
+                        return .send(.persistSession)
+                    }
+                    return .none
+                case .failure(let message):
+                    for workspaceIndex in state.workspaces.indices {
+                        guard let tabIndex = state.workspaces[workspaceIndex].tabs.firstIndex(where: { $0.id == tabID }),
+                              case .codeReview(var tab) = state.workspaces[workspaceIndex].tabs[tabIndex],
+                              var flow = tab.flow
+                        else { continue }
+                        flow.session.lastTurnError = message
+                        tab.flow = flow
+                        state.workspaces[workspaceIndex].tabs[tabIndex] = .codeReview(tab)
+                        break
+                    }
+                    state.lastErrorMessage = message
+                    return .none
+                }
 
             case let .codeReviewLoadDiff(tabID, repoID, diffSpec):
                 guard let workspace = state.activeWorkspace,

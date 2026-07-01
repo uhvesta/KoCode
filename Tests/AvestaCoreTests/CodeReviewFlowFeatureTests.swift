@@ -87,6 +87,113 @@ final class CodeReviewFlowFeatureTests: XCTestCase {
         }
     }
 
+    func testScopeSwitchPreservesSelectedFileWhenPossible() async {
+        let gitFile = Self.file
+        let lastTurnFile = FileDiff(
+            id: gitFile.id,
+            path: gitFile.path,
+            status: .modified,
+            hunks: [
+                DiffHunk(
+                    oldStart: 6,
+                    oldCount: 2,
+                    newStart: 6,
+                    newCount: 3,
+                    lines: [
+                        DiffLine(kind: .context, oldLineNumber: 6, newLineNumber: 6, content: "    var body: some View {"),
+                        DiffLine(kind: .added, oldLineNumber: nil, newLineNumber: 7, content: "        Text(subtitle)")
+                    ]
+                )
+            ]
+        )
+        let otherFile = FileDiff(path: "Sources/Other.swift", status: .modified, hunks: [])
+        let store = TestStore(
+            initialState: CodeReviewFlowFeature.State(
+                session: CodeReviewFlowFeature.CodeReviewSessionState(
+                    diffSpec: "Working tree",
+                    repoPath: URL(fileURLWithPath: "/tmp/repo"),
+                    files: [otherFile, gitFile],
+                    lastTurnFiles: [lastTurnFile],
+                    activeFileIndex: 1
+                )
+            )
+        ) {
+            CodeReviewFlowFeature()
+        }
+
+        await store.send(.scopeSelected(.lastTurnChanges)) {
+            $0.session.scope = .lastTurnChanges
+            $0.session.activeFileIndex = 0
+            $0.navigation = CodeReviewNavigationState(changes: CodeReviewChangeNavigation.changes(in: lastTurnFile))
+        }
+    }
+
+    func testSendReviewToBoardExportsAllCommentsAsOneItem() async {
+        let file = Self.file
+        let now = Date(timeIntervalSince1970: 1_782_835_200)
+        let commentID = UUID(uuidString: "00000000-0000-0000-0000-000000000401")!
+        let secondCommentID = UUID(uuidString: "00000000-0000-0000-0000-000000000403")!
+        let boardItemID = UUID(uuidString: "00000000-0000-0000-0000-000000000402")!
+        let store = TestStore(
+            initialState: CodeReviewFlowFeature.State(
+                session: CodeReviewFlowFeature.CodeReviewSessionState(
+                    diffSpec: "Working tree",
+                    repoPath: URL(fileURLWithPath: "/tmp/repo"),
+                    files: [file],
+                    comments: [
+                        ReviewComment(
+                            id: commentID,
+                            fileID: file.id,
+                            startLine: 2,
+                            endLine: 2,
+                            highlightedText: "let title = \"New\"",
+                            text: "Keep this scoped to the review flow.",
+                            createdAt: now
+                        ),
+                        ReviewComment(
+                            id: secondCommentID,
+                            fileID: file.id,
+                            startLine: 3,
+                            endLine: 3,
+                            highlightedText: "let subtitle = \"Workbench\"",
+                            text: "Send all comments together.",
+                            createdAt: now
+                        )
+                    ]
+                )
+            )
+        ) {
+            CodeReviewFlowFeature()
+        }
+
+        await store.send(.sendReviewToBoardButtonTapped(id: boardItemID, now: now)) {
+            $0.boardItems = [
+                BoardItem(
+                    id: boardItemID,
+                    content: """
+                    # Code Review: Working tree @ 2026-06-30T16:00:00Z
+
+                    ## `Sources/App.swift`
+
+                    ### Line 2
+                    ```swift
+                    let title = "New"
+                    ```
+                    Keep this scoped to the review flow.
+
+                    ### Line 3
+                    ```swift
+                    let subtitle = "Workbench"
+                    ```
+                    Send all comments together.
+                    """,
+                    source: "Code Review: Working tree",
+                    createdAt: now
+                )
+            ]
+        }
+    }
+
     private static let file = FileDiff(
         id: UUID(uuidString: "00000000-0000-0000-0000-000000000201")!,
         path: "Sources/App.swift",

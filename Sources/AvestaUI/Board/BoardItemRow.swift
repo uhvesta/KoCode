@@ -12,6 +12,15 @@ struct BoardItemRow: View {
                 Text(item.source)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
+                if let reviewCommentCount {
+                    Text("\(reviewCommentCount) \(reviewCommentCount == 1 ? "comment" : "comments")")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
                 Spacer()
                 Button {
                     NSPasteboard.general.clearContents()
@@ -34,9 +43,11 @@ struct BoardItemRow: View {
             }
 
             Text(item.content)
-                .font(.caption.monospaced())
-                .lineLimit(isExpanded ? nil : 4)
+                .font(.system(size: 11, design: .monospaced))
+                .lineSpacing(2)
+                .lineLimit(isExpanded ? nil : collapsedLineLimit)
                 .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             Text(item.createdAt.formatted(date: .abbreviated, time: .shortened))
                 .font(.caption2)
@@ -48,5 +59,20 @@ struct BoardItemRow: View {
             isExpanded.toggle()
         }
         .padding(.vertical, 6)
+    }
+
+    private var collapsedLineLimit: Int {
+        reviewCommentCount == nil ? 6 : 18
+    }
+
+    private var reviewCommentCount: Int? {
+        guard item.source.hasPrefix("Code Review:") else { return nil }
+        let count = item.content
+            .split(separator: "\n")
+            .filter { line in
+                line.hasPrefix("### Line ") || line.hasPrefix("### Lines ")
+            }
+            .count
+        return count > 0 ? count : nil
     }
 }
