@@ -1,88 +1,93 @@
+import AppKit
 import AvestaCore
 import AvestaNotifications
+import AvestaTerminal
 import AvestaUI
-import ComposableArchitecture
 import SwiftUI
 
 @main
 struct AvestaCodeApp: App {
-    private let store: StoreOf<AppFeature>
-    @State private var notificationService = NotificationService()
-    @State private var outputMonitors: [UUID: OutputMonitor] = [:]
-    private let agentEventClassifier = TerminalAgentEventClassifier()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @State private var model: ApplicationModel
+    @State private var notifications = NotificationService()
 
     init() {
-        let config = AppConfig.default
-        let sessionStore = AppSessionStore()
-        self.store = Store(initialState: AppFeature.State.restored(config: config, sessionStore: sessionStore)) {
-            AppFeature(config: config, sessionStore: sessionStore)
-        }
+        _model = State(initialValue: try! ApplicationModel())
     }
 
     var body: some Scene {
-        WindowGroup {
-            MainWindow(store: store) { tabID, output in
-                if let event = agentEventClassifier.event(from: output) {
-                    store.send(.incrementBadge(tabID: tabID))
-                    store.send(.notifyInApp(id: UUID(), title: event.title, body: event.body, tabID: tabID, createdAt: Date()))
-                    notificationService.notify(title: event.title, body: event.body, tabID: tabID)
-                    return
+        WindowGroup { MainWindow(model: model).task { await notifications.requestPermission() } }
+            .commands {
+                CommandGroup(after: .newItem) {
+                    Button("New Terminal") { createTab(.terminal, beside: false) }.keyboardShortcut("t", modifiers: .command)
+                    Button("New Review") { createTab(.review, beside: false) }.keyboardShortcut("r", modifiers: [.command, .shift])
+                    Divider()
+                    Button("New Terminal Beside") { createTab(.terminal, beside: true) }.keyboardShortcut("t", modifiers: [.command, .option])
+                    Button("New Review Beside") { createTab(.review, beside: true) }.keyboardShortcut("r", modifiers: [.command, .option])
                 }
-
-                let monitor = outputMonitors[tabID] ?? OutputMonitor(patterns: store.settings.config.notificationPatterns)
-                outputMonitors[tabID] = monitor
-                for match in monitor.ingest(output) {
-                    store.send(.incrementBadge(tabID: tabID))
-                    store.send(.notifyInApp(id: UUID(), title: "Terminal Needs Attention", body: match.line, tabID: tabID, createdAt: Date()))
-                    notificationService.notify(title: "Terminal Needs Attention", body: match.line, tabID: tabID)
+                CommandMenu("Workspace") {
+                    Button("Start New Workspace Session") { if let id = model.activeWorkspace?.id { Task { await model.startNewActivitySession(workspaceID: id) } } }
+                    Button("Refresh Review") { if let id = model.activeWorkspace?.id { Task { await model.refreshReview(workspaceID: id) } } }.keyboardShortcut("r", modifiers: .command)
                 }
-            }
-                .task {
-                    await notificationService.requestPermission()
-                }
-        }
-        .commands {
-            CommandGroup(after: .newItem) {
-                Button("New Terminal") {
-                    store.send(.addTerminalTab(id: UUID()))
-                }
-                .keyboardShortcut("t", modifiers: .command)
-            }
-
-            CommandMenu("Tabs") {
-                Button("Close Tab") {
-                    store.send(.closeActiveTabOrWorkspace)
-                }
-                .keyboardShortcut("w", modifiers: .command)
-
-                ForEach(1..<10) { index in
-                    Button("Select Tab \(index)") {
-                        store.send(.selectTab(index: index - 1))
+                CommandMenu("Tabs") {
+                    Button("Close Tab") { closeActiveTab() }
+                        .keyboardShortcut("w", modifiers: .command)
+                        .disabled(model.activeWorkspace?.activeTab == nil)
+                    Divider()
+                    Button("Previous Tab") { selectAdjacentTab(offset: -1) }
+                        .keyboardShortcut("[", modifiers: [.command, .shift])
+                        .disabled((model.activeWorkspace?.tabs.count ?? 0) < 2)
+                    Button("Next Tab") { selectAdjacentTab(offset: 1) }
+                        .keyboardShortcut("]", modifiers: [.command, .shift])
+                        .disabled((model.activeWorkspace?.tabs.count ?? 0) < 2)
+                    Divider()
+                    ForEach(1...9, id: \.self) { number in
+                        Button(number == 9 ? "Select Last Tab" : "Select Tab \(number)") {
+                            selectTab(shortcutNumber: number)
+                        }
+                        .keyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: .command)
+                        .disabled(tabID(shortcutNumber: number) == nil)
                     }
-                    .keyboardShortcut(KeyEquivalent(Character("\(index)")), modifiers: .command)
                 }
             }
 
-            CommandMenu("Board") {
-                Button("Toggle Board") {
-                    store.send(.toggleBoard)
-                }
-                .keyboardShortcut("b", modifiers: [.command, .shift])
-
-                Button("Send Terminal Output to Board") {
-                    store.send(.sendActiveTerminalOutputToBoard(id: UUID(), createdAt: Date()))
-                }
-                .keyboardShortcut("s", modifiers: [.command, .shift])
-
-                Button("Paste Most Recent Board Item") {
-                    store.send(.pasteMostRecentBoardItemToActiveTerminal)
-                }
-                .keyboardShortcut("v", modifiers: [.command, .shift])
-            }
-        }
-
-        Settings {
-            SettingsView(store: store)
-        }
+        Settings { SettingsView(model: model) }
     }
+
+    private func createTab(_ kind: TabKind, beside: Bool) {
+        guard let workspace = model.activeWorkspace else { return }
+        Task { _ = await model.createTab(kind: kind, workspaceID: workspace.id, workingDirectory: workspace.path, beside: beside) }
+    }
+
+    private func closeActiveTab() {
+        guard let workspace = model.activeWorkspace, let tab = workspace.activeTab else { return }
+        if tab.kind == .terminal { TerminalSurfaceRegistry.shared.release(tabID: tab.id) }
+        Task { await model.closeTab(tab.id, workspaceID: workspace.id) }
+    }
+
+    private func selectAdjacentTab(offset: Int) {
+        guard let workspace = model.activeWorkspace, let tabID = workspace.adjacentTabID(offset: offset) else { return }
+        Task { await model.selectTab(workspaceID: workspace.id, tabID: tabID) }
+    }
+
+    private func tabID(shortcutNumber: Int) -> UUID? {
+        model.activeWorkspace?.tabID(shortcutNumber: shortcutNumber)
+    }
+
+    private func selectTab(shortcutNumber: Int) {
+        guard let workspace = model.activeWorkspace, let tabID = workspace.tabID(shortcutNumber: shortcutNumber) else { return }
+        Task { await model.selectTab(workspaceID: workspace.id, tabID: tabID) }
+    }
+}
+
+@MainActor
+private final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // SwiftPM-launched executables can otherwise remain a background app with
+        // a WindowGroup that was created but never brought onscreen.
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) { GhosttyApp.shared.shutdown() }
 }

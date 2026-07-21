@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public actor GitService {
@@ -9,278 +10,346 @@ public actor GitService {
         self.fileManager = fileManager
     }
 
-    public func ensureBareClone(remoteURL: String, name: String) async throws -> URL {
+    public func sharedClonePath(remoteURL: String) -> URL {
+        let canonical = SQLiteStateRepository.canonicalRemoteURL(remoteURL)
+        let hash = SHA256.hash(data: Data(canonical.utf8)).prefix(12).map { String(format: "%02x", $0) }.joined()
+        let name = Self.repositoryName(remoteURL)
+        return cacheRoot.appending(path: "\(name)-\(hash).git", directoryHint: .isDirectory)
+    }
+
+    public func ensureSharedClone(remoteURL: String, at path: URL) async throws {
         try fileManager.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
-        let bareRepo = cacheRoot.appending(path: "\(name).git", directoryHint: .isDirectory)
-
-        if fileManager.fileExists(atPath: bareRepo.path) {
-            _ = try await run(["git", "-C", bareRepo.path, "fetch", "--all", "--prune"], cwd: nil)
+        if fileManager.fileExists(atPath: path.path) {
+            try ensureOriginFetchRefspec(sharedClone: path)
+            _ = try run(["git", "-C", path.path, "fetch", "--all", "--prune"])
         } else {
-            _ = try await run(["git", "clone", "--bare", remoteURL, bareRepo.path], cwd: nil)
+            _ = try run(["git", "clone", "--bare", remoteURL, path.path])
+            try ensureOriginFetchRefspec(sharedClone: path)
+            _ = try run(["git", "-C", path.path, "fetch", "--all", "--prune"])
         }
-
-        return bareRepo
     }
 
-    public func createWorktree(
-        bareRepo: URL,
-        branch: String,
-        destination: URL,
-        baseBranch: String? = nil
-    ) async throws {
-        try fileManager.createDirectory(
-            at: destination.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
+    public func fetch(sharedClone: URL) async throws {
+        try ensureOriginFetchRefspec(sharedClone: sharedClone)
+        _ = try run(["git", "-C", sharedClone.path, "fetch", "--all", "--prune"])
+    }
 
-        if try await localBranchExists(bareRepo: bareRepo, branch: branch) {
-            _ = try await run(["git", "-C", bareRepo.path, "worktree", "add", destination.path, branch], cwd: nil)
+    public func branches(sharedClone: URL) async throws -> [String] {
+        let output = try run(["git", "-C", sharedClone.path, "for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes/origin"])
+        return output.split(separator: "\n").map(String.init).filter { !$0.hasSuffix("/HEAD") }.sorted()
+    }
+
+    public func createWorktree(sharedClone: URL, branch: String, destination: URL, baseBranch: String?) async throws {
+        try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let exists = (try? run(["git", "-C", sharedClone.path, "show-ref", "--verify", "--quiet", "refs/heads/\(branch)"])) != nil
+        if exists {
+            _ = try run(["git", "-C", sharedClone.path, "worktree", "add", destination.path, branch])
         } else {
-            let baseRef = try await worktreeBaseRef(bareRepo: bareRepo, preferredBranch: baseBranch)
-            _ = try await run(["git", "-C", bareRepo.path, "worktree", "add", "-b", branch, destination.path, baseRef], cwd: nil)
+            let base = try resolvedBase(sharedClone: sharedClone, requested: baseBranch)
+            _ = try run(["git", "-C", sharedClone.path, "worktree", "add", "-b", branch, destination.path, base])
         }
+        // Worktrees created from a bare shared clone must retain the normal
+        // remote-tracking refspec so `git fetch origin <branch>` updates
+        // origin/<branch> instead of only FETCH_HEAD.
+        try ensureOriginFetchRefspec(sharedClone: destination)
     }
 
-    public func removeWorktree(bareRepo: URL, worktreePath: URL) async throws {
-        _ = try await run(["git", "-C", bareRepo.path, "worktree", "remove", worktreePath.path], cwd: nil)
+    public func removeWorktree(sharedClone: URL, path: URL) async throws {
+        _ = try run(["git", "-C", sharedClone.path, "worktree", "remove", "--force", path.path])
+        _ = try? run(["git", "-C", sharedClone.path, "worktree", "prune"])
     }
 
-    public func listWorktrees(bareRepo: URL) async throws -> [String] {
-        let output = try await run(["git", "-C", bareRepo.path, "worktree", "list", "--porcelain"], cwd: nil)
-        return output
-            .split(separator: "\n")
-            .compactMap { line -> String? in
-                guard line.hasPrefix("worktree ") else { return nil }
-                return String(line.dropFirst("worktree ".count))
-            }
-    }
-
-    public func diff(repoPath: URL, spec: String) async throws -> [FileDiff] {
-        let output = try await run(["git", "-C", repoPath.path, "diff", "--no-ext-diff", "--find-renames", spec], cwd: nil)
-        return try GitDiffParser().parse(output)
-    }
-
-    public func workingTreeDiff(repoPath: URL) async throws -> [FileDiff] {
-        let baseFiles = try await headSnapshot(repoPath: repoPath)
-        let currentFiles = try workingTreeSnapshot(repoPath: repoPath)
-        return try await diffSnapshots(old: baseFiles, new: currentFiles)
-    }
-
-    public func reviewCheckpoint(repoPath: URL, createdAt: Date) async throws -> ReviewCheckpoint {
-        ReviewCheckpoint(createdAt: createdAt, files: try workingTreeSnapshot(repoPath: repoPath))
-    }
-
-    public func diff(repoPath: URL, since checkpoint: ReviewCheckpoint) async throws -> [FileDiff] {
-        try await diffSnapshots(old: checkpoint.files, new: workingTreeSnapshot(repoPath: repoPath))
-    }
-
-    public func branches(repoPath: URL) async throws -> [String] {
-        let output = try await run(["git", "-C", repoPath.path, "branch", "--format=%(refname:short)"], cwd: nil)
-        return output.split(separator: "\n").map(String.init)
-    }
-
-    public func currentBranch(repoPath: URL) async throws -> String {
-        try await run(["git", "-C", repoPath.path, "branch", "--show-current"], cwd: nil)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func workingTreeSnapshot(repoPath: URL) throws -> [ReviewCheckpointFile] {
-        let output = try runSync(["git", "-C", repoPath.path, "ls-files", "-co", "--exclude-standard", "-z"], cwd: nil)
-        let paths = output
-            .split(separator: "\0")
-            .map(String.init)
-            .filter { !$0.isEmpty }
-            .sorted()
-
-        return try paths.compactMap { path in
-            let url = safeFileURL(for: path, under: repoPath)
-            var isDirectory: ObjCBool = false
-            guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
-                  !isDirectory.boolValue
-            else { return nil }
-
-            let data = try Data(contentsOf: url)
-            guard let content = String(data: data, encoding: .utf8) else { return nil }
-            return ReviewCheckpointFile(path: path, content: content)
+    public func removeSharedClone(at path: URL) throws {
+        let root = cacheRoot.standardizedFileURL.path
+        let candidate = path.standardizedFileURL.path
+        guard candidate.hasPrefix(root + "/") else {
+            throw GitServiceError.invalidCachePath(candidate)
         }
+        if fileManager.fileExists(atPath: candidate) { try fileManager.removeItem(at: path) }
     }
 
-    private func headSnapshot(repoPath: URL) async throws -> [ReviewCheckpointFile] {
-        do {
-            _ = try await run(["git", "-C", repoPath.path, "rev-parse", "--verify", "HEAD"], cwd: nil)
-        } catch {
-            return []
-        }
-
-        let output = try await run(["git", "-C", repoPath.path, "ls-tree", "-r", "-z", "--name-only", "HEAD"], cwd: nil)
-        let paths = output
-            .split(separator: "\0")
-            .map(String.init)
-            .filter { !$0.isEmpty }
-            .sorted()
-
-        var files: [ReviewCheckpointFile] = []
-        for path in paths {
-            let content = try await run(["git", "-C", repoPath.path, "show", "HEAD:\(path)"], cwd: nil)
-            files.append(ReviewCheckpointFile(path: path, content: content))
-        }
-        return files
+    public func dirtyChangeCount(repository: URL) async throws -> Int {
+        let output = try run(["git", "-C", repository.path, "status", "--porcelain=v1", "--untracked-files=all"])
+        return output.split(separator: "\n").count
     }
 
-    private func localBranchExists(bareRepo: URL, branch: String) async throws -> Bool {
-        let output = try await run(
-            ["git", "-C", bareRepo.path, "show-ref", "--verify", "refs/heads/\(branch)"],
-            cwd: nil,
-            allowedStatuses: [0, 1, 128]
+    public func capture(repository: WorkspaceRepositoryRecord, relativeTo reference: String? = nil) async throws -> ReviewSnapshotRepository {
+        if let reference, !reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return try captureRelative(repository: repository, reference: reference)
+        }
+        let branch = try run(["git", "-C", repository.worktreePath.path, "branch", "--show-current"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let head = try? run(["git", "-C", repository.worktreePath.path, "rev-parse", "HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let statusOutput = try run(["git", "-C", repository.worktreePath.path, "status", "--porcelain=v1", "--untracked-files=all", "-z"])
+        let entries = Self.parseStatus(statusOutput)
+        var files: [SnapshotFile] = []
+        for entry in entries {
+            let path = entry.path
+            let status = entry.status
+            let oldPath = entry.oldPath
+            let oldLookup = oldPath ?? path
+            let oldContent = (try? run(["git", "-C", repository.worktreePath.path, "show", "HEAD:\(oldLookup)"])) ?? ""
+            let fileURL = repository.worktreePath.appending(path: path, directoryHint: .notDirectory)
+            let newContent = (try? String(contentsOf: fileURL, encoding: .utf8)) ?? ""
+            var patch = (try? run(["git", "-C", repository.worktreePath.path, "diff", "--no-ext-diff", "--find-renames", "HEAD", "--", path])) ?? ""
+            if patch.isEmpty && status == .added { patch = Self.addedPatch(path: path, content: newContent) }
+            let fingerprint = Self.hash([path, status.rawValue, oldContent, newContent, patch].joined(separator: "\u{0}"))
+            files.append(SnapshotFile(path: path, status: status, oldPath: oldPath, oldContent: oldContent, newContent: newContent, patch: patch, fingerprint: fingerprint))
+        }
+        return ReviewSnapshotRepository(repositoryID: repository.id, headOID: head, branch: branch, files: files.sorted { $0.path < $1.path })
+    }
+
+    private func captureRelative(repository: WorkspaceRepositoryRecord, reference: String) throws -> ReviewSnapshotRepository {
+        let root = repository.worktreePath.path
+        let resolvedReference = try run(["git", "-C", root, "rev-parse", "--verify", "\(reference)^{commit}"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let branch = try run(["git", "-C", root, "branch", "--show-current"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let head = try? run(["git", "-C", root, "rev-parse", "HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let aggregatePatch = try run(["git", "-C", root, "diff", "--no-ext-diff", "--find-renames", reference, "--"])
+        let parsed = aggregatePatch.isEmpty ? [] : (try GitDiffParser().parse(aggregatePatch))
+        let patches = Self.filePatches(from: aggregatePatch)
+        let oldContents = try batchFileContents(
+            root: root,
+            reference: reference,
+            paths: parsed.map { $0.oldPath ?? $0.path }
         )
-        return !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        var files: [SnapshotFile] = []
+        var seenPaths: Set<String> = []
+        for diff in parsed {
+            let oldLookup = diff.oldPath ?? diff.path
+            let oldContent = oldContents[oldLookup] ?? ""
+            let newContent = (try? String(contentsOf: repository.worktreePath.appending(path: diff.path), encoding: .utf8)) ?? ""
+            let patch = patches[diff.path] ?? ""
+            let fingerprint = Self.hash([resolvedReference, diff.path, diff.status.rawValue, oldContent, newContent, patch].joined(separator: "\u{0}"))
+            files.append(SnapshotFile(path: diff.path, status: diff.status, oldPath: diff.oldPath, oldContent: oldContent, newContent: newContent, patch: patch, fingerprint: fingerprint))
+            seenPaths.insert(diff.path)
+        }
+
+        let statusOutput = try run(["git", "-C", root, "status", "--porcelain=v1", "--untracked-files=all", "-z"])
+        for entry in Self.parseStatus(statusOutput) where entry.status == .added && !seenPaths.contains(entry.path) {
+            let content = (try? String(contentsOf: repository.worktreePath.appending(path: entry.path), encoding: .utf8)) ?? ""
+            let patch = Self.addedPatch(path: entry.path, content: content)
+            files.append(SnapshotFile(path: entry.path, status: .added, oldContent: "", newContent: content, patch: patch, fingerprint: Self.hash([resolvedReference, entry.path, content].joined(separator: "\u{0}"))))
+        }
+        return ReviewSnapshotRepository(repositoryID: repository.id, headOID: head, branch: "\(branch) vs \(reference)", files: files.sorted { $0.path < $1.path })
     }
 
-    private func worktreeBaseRef(bareRepo: URL, preferredBranch: String?) async throws -> String {
-        let candidates = try await baseBranchCandidates(bareRepo: bareRepo, preferredBranch: preferredBranch)
-        for candidate in candidates {
-            if try await localBranchExists(bareRepo: bareRepo, branch: candidate) {
-                return candidate
+    /// Splits the already-loaded aggregate diff into its per-file patches.
+    /// This avoids launching another `git diff` process for every changed file.
+    private static func filePatches(from aggregatePatch: String) -> [String: String] {
+        guard !aggregatePatch.isEmpty else { return [:] }
+        var chunks: [String] = []
+        var current = ""
+        for line in aggregatePatch.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("diff --git "), !current.isEmpty {
+                chunks.append(current)
+                current = ""
             }
+            current += line
+            current += "\n"
         }
-        return candidates.first ?? "HEAD"
-    }
+        if !current.isEmpty { chunks.append(current) }
 
-    private func baseBranchCandidates(bareRepo: URL, preferredBranch: String?) async throws -> [String] {
-        var candidates: [String] = []
-        if let preferredBranch = preferredBranch?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !preferredBranch.isEmpty {
-            candidates.append(preferredBranch)
+        var result: [String: String] = [:]
+        for chunk in chunks {
+            guard let file = try? GitDiffParser().parse(chunk).first else { continue }
+            result[file.path] = chunk
         }
-
-        let defaultBranch = try await run(
-            ["git", "-C", bareRepo.path, "symbolic-ref", "--quiet", "--short", "HEAD"],
-            cwd: nil,
-            allowedStatuses: [0, 1]
-        )
-        let trimmedDefault = defaultBranch.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedDefault.isEmpty {
-            candidates.append(trimmedDefault)
-        }
-
-        candidates.append(contentsOf: ["main", "master"])
-        var seen: Set<String> = []
-        return candidates.filter { seen.insert($0).inserted }
+        return result
     }
 
-    private func diffSnapshots(
-        old oldFiles: [ReviewCheckpointFile],
-        new newFiles: [ReviewCheckpointFile]
-    ) async throws -> [FileDiff] {
-        let root = fileManager.temporaryDirectory
-            .appending(path: "AvestaCodeReview-\(UUID().uuidString)", directoryHint: .isDirectory)
-        let oldRoot = root.appending(path: "base", directoryHint: .isDirectory)
-        let newRoot = root.appending(path: "current", directoryHint: .isDirectory)
-
-        try fileManager.createDirectory(at: oldRoot, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: newRoot, withIntermediateDirectories: true)
-        defer { try? fileManager.removeItem(at: root) }
-
-        try writeSnapshot(oldFiles, to: oldRoot)
-        try writeSnapshot(newFiles, to: newRoot)
-
-        let output = try await run(
-            ["git", "diff", "--no-index", "--no-ext-diff", "--find-renames", "base", "current"],
-            cwd: root,
-            allowedStatuses: [0, 1]
-        )
-        guard !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-        return try GitDiffParser().parse(output)
-            .map { $0.normalized(oldRoot: "base", newRoot: "current") }
-    }
-
-    private func writeSnapshot(_ files: [ReviewCheckpointFile], to root: URL) throws {
-        for file in files {
-            let url = safeFileURL(for: file.path, under: root)
-            try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try file.content.write(to: url, atomically: true, encoding: .utf8)
-        }
-    }
-
-    private func safeFileURL(for path: String, under root: URL) -> URL {
-        path
-            .split(separator: "/")
-            .filter { !$0.isEmpty && $0 != "." && $0 != ".." }
-            .reduce(root) { partial, component in
-                partial.appending(path: String(component), directoryHint: .notDirectory)
-            }
-    }
-
-    private func run(_ args: [String], cwd: URL?, allowedStatuses: Set<Int32> = [0]) async throws -> String {
-        guard let executable = args.first else { return "" }
-
+    /// Reads every baseline file through one `git cat-file --batch` process
+    /// instead of spawning `git show` once per changed path.
+    private func batchFileContents(root: String, reference: String, paths: [String]) throws -> [String: String] {
+        guard !paths.isEmpty else { return [:] }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = args
-        process.currentDirectoryURL = cwd
-
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-
+        process.arguments = ["git", "-C", root, "cat-file", "--batch"]
+        let stdin = Pipe()
+        let capture = try ProcessFileCapture()
+        process.standardInput = stdin
+        process.standardOutput = capture.stdout
+        process.standardError = capture.stderr
         try process.run()
+        let requests = paths.map { "\(reference):\($0)" }.joined(separator: "\n") + "\n"
+        stdin.fileHandleForWriting.write(Data(requests.utf8))
+        try stdin.fileHandleForWriting.close()
         process.waitUntilExit()
-
-        let output = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let error = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-
-        guard allowedStatuses.contains(process.terminationStatus) else {
-            throw GitServiceError.commandFailed(
-                executable: executable,
-                arguments: Array(args.dropFirst()),
-                status: process.terminationStatus,
-                stderr: error
-            )
-        }
-
-        return output
-    }
-
-    private func runSync(_ args: [String], cwd: URL?) throws -> String {
-        guard let executable = args.first else { return "" }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = args
-        process.currentDirectoryURL = cwd
-
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-
-        try process.run()
-        process.waitUntilExit()
-
-        let output = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let error = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-
+        let output = try capture.outputData()
+        let error = try capture.errorData()
         guard process.terminationStatus == 0 else {
             throw GitServiceError.commandFailed(
-                executable: executable,
-                arguments: Array(args.dropFirst()),
+                arguments: process.arguments ?? [],
                 status: process.terminationStatus,
-                stderr: error
+                stderr: String(decoding: error, as: UTF8.self)
             )
         }
 
+        var result: [String: String] = [:]
+        var cursor = output.startIndex
+        for path in paths {
+            guard let newline = output[cursor...].firstIndex(of: 0x0A) else { break }
+            let header = String(decoding: output[cursor..<newline], as: UTF8.self)
+            cursor = output.index(after: newline)
+            if header.hasSuffix(" missing") {
+                result[path] = ""
+                continue
+            }
+            guard let size = Int(header.split(separator: " ").last ?? ""),
+                  size >= 0,
+                  let end = output.index(cursor, offsetBy: size, limitedBy: output.endIndex) else { break }
+            result[path] = String(decoding: output[cursor..<end], as: UTF8.self)
+            cursor = end
+            if cursor < output.endIndex, output[cursor] == 0x0A { cursor = output.index(after: cursor) }
+        }
+        return result
+    }
+
+    public static func workspaceFingerprint(_ repositories: [ReviewSnapshotRepository]) -> String {
+        hash(repositories.sorted { $0.repositoryID.uuidString < $1.repositoryID.uuidString }.flatMap { repository in
+            [repository.repositoryID.uuidString, repository.headOID ?? "", repository.branch] + repository.files.flatMap { [$0.path, $0.fingerprint] }
+        }.joined(separator: "\u{0}"))
+    }
+
+    public static func fileDiff(from file: SnapshotFile) -> FileDiff {
+        if !file.patch.isEmpty, let parsed = try? GitDiffParser().parse(file.patch), let first = parsed.first { return first }
+        return LineDiffBuilder.build(
+            path: file.path,
+            oldPath: file.oldPath,
+            status: file.status,
+            oldContent: file.oldContent,
+            newContent: file.newContent
+        )
+    }
+
+    public static func compare(old: ReviewSnapshotRecord, new: ReviewSnapshotRecord, repositoryNames: [UUID: String]) -> [WorkspaceFileDiff] {
+        let oldFiles = Dictionary(uniqueKeysWithValues: old.repositories.flatMap { repository in repository.files.map { ("\(repository.repositoryID):\($0.path)", (repository.repositoryID, $0)) } })
+        let newFiles = Dictionary(uniqueKeysWithValues: new.repositories.flatMap { repository in repository.files.map { ("\(repository.repositoryID):\($0.path)", (repository.repositoryID, $0)) } })
+        return Set(oldFiles.keys).union(newFiles.keys).sorted().compactMap { key in
+            let oldEntry = oldFiles[key]
+            let newEntry = newFiles[key]
+            let repositoryID = newEntry?.0 ?? oldEntry!.0
+            let oldContent = oldEntry?.1.newContent ?? ""
+            let newContent = newEntry?.1.newContent ?? ""
+            guard oldContent != newContent else { return nil }
+            let source = newEntry?.1 ?? oldEntry!.1
+            let status: FileStatus = oldEntry == nil ? .added : (newEntry == nil ? .deleted : .modified)
+            let comparison = SnapshotFile(path: source.path, status: status, oldPath: source.oldPath, oldContent: oldContent, newContent: newContent, patch: "", fingerprint: hash(oldContent + "\u{0}" + newContent))
+            return WorkspaceFileDiff(repositoryID: repositoryID, repositoryName: repositoryNames[repositoryID] ?? "Repository", diff: fileDiff(from: comparison), oldContent: oldContent, newContent: newContent)
+        }
+    }
+
+    private func resolvedBase(sharedClone: URL, requested: String?) throws -> String {
+        let candidates = [requested, "main", "master", "origin/main", "origin/master"].compactMap { $0 }.filter { !$0.isEmpty }
+        for candidate in candidates where (try? run(["git", "-C", sharedClone.path, "rev-parse", "--verify", candidate])) != nil { return candidate }
+        return "HEAD"
+    }
+
+    private func run(_ arguments: [String]) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = arguments
+        // A PR-sized diff can exceed a pipe's kernel buffer. File-backed
+        // capture lets git keep writing even when this call originates on the
+        // main actor and no dispatch worker is available to drain a Pipe.
+        let capture = try ProcessFileCapture()
+        process.standardOutput = capture.stdout
+        process.standardError = capture.stderr
+        try process.run()
+        process.waitUntilExit()
+        let output = String(decoding: try capture.outputData(), as: UTF8.self)
+        let error = String(decoding: try capture.errorData(), as: UTF8.self)
+        guard process.terminationStatus == 0 else { throw GitServiceError.commandFailed(arguments: arguments, status: process.terminationStatus, stderr: error) }
         return output
+    }
+
+    private func ensureOriginFetchRefspec(sharedClone: URL) throws {
+        let expected = "+refs/heads/*:refs/remotes/origin/*"
+        let configured = try? run(["git", "-C", sharedClone.path, "config", "--get-all", "remote.origin.fetch"])
+        guard !(configured?.split(separator: "\n").contains { String($0) == expected } ?? false) else { return }
+        _ = try run(["git", "-C", sharedClone.path, "config", "--add", "remote.origin.fetch", expected])
+    }
+
+    private static func parseStatus(_ output: String) -> [(status: FileStatus, path: String, oldPath: String?)] {
+        let fields = output.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
+        var result: [(FileStatus, String, String?)] = []
+        var index = 0
+        while index < fields.count {
+            let field = fields[index]
+            guard field.count >= 4 else { index += 1; continue }
+            let code = String(field.prefix(2))
+            let path = String(field.dropFirst(3))
+            if code.contains("R"), index + 1 < fields.count {
+                result.append((.renamed, fields[index + 1], path))
+                index += 2
+            } else {
+                let status: FileStatus = code == "??" || code.contains("A") ? .added : (code.contains("D") ? .deleted : .modified)
+                result.append((status, path, nil))
+                index += 1
+            }
+        }
+        return result
+    }
+
+    private static func addedPatch(path: String, content: String) -> String {
+        let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
+        return "diff --git a/\(path) b/\(path)\nnew file mode 100644\n--- /dev/null\n+++ b/\(path)\n@@ -0,0 +1,\(lines.count) @@\n" + lines.map { "+\($0)" }.joined(separator: "\n") + "\n"
+    }
+
+    private static func hash(_ value: String) -> String {
+        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func repositoryName(_ remoteURL: String) -> String {
+        let trimmed = remoteURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return (trimmed.split(separator: "/").last.map(String.init) ?? "repository").replacingOccurrences(of: ".git", with: "")
     }
 }
 
-public enum GitServiceError: Error, Equatable, LocalizedError {
-    case commandFailed(executable: String, arguments: [String], status: Int32, stderr: String)
+private final class ProcessFileCapture {
+    let stdout: FileHandle
+    let stderr: FileHandle
+
+    private let stdoutURL: URL
+    private let stderrURL: URL
+
+    init() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("avestacode-git-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        stdoutURL = directory.appendingPathComponent("stdout")
+        stderrURL = directory.appendingPathComponent("stderr")
+        FileManager.default.createFile(atPath: stdoutURL.path, contents: nil)
+        FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
+        stdout = try FileHandle(forWritingTo: stdoutURL)
+        stderr = try FileHandle(forWritingTo: stderrURL)
+    }
+
+    deinit {
+        try? stdout.close()
+        try? stderr.close()
+        try? FileManager.default.removeItem(at: stdoutURL.deletingLastPathComponent())
+    }
+
+    func outputData() throws -> Data {
+        try stdout.synchronize()
+        return try Data(contentsOf: stdoutURL)
+    }
+
+    func errorData() throws -> Data {
+        try stderr.synchronize()
+        return try Data(contentsOf: stderrURL)
+    }
+}
+
+public enum GitServiceError: Error, LocalizedError, Equatable {
+    case commandFailed(arguments: [String], status: Int32, stderr: String)
+    case invalidCachePath(String)
 
     public var errorDescription: String? {
         switch self {
-        case .commandFailed(let executable, let arguments, let status, let stderr):
-            return "Command failed (\(status)): \(([executable] + arguments).joined(separator: " "))\n\(stderr)"
+        case .commandFailed(let arguments, let status, let stderr):
+            return "Git failed (\(status)): \(arguments.joined(separator: " "))\n\(stderr)"
+        case .invalidCachePath(let path):
+            return "Refusing to remove a path outside the shared repository cache: \(path)"
         }
     }
 }

@@ -1,0 +1,34 @@
+module(
+    name = "avestacode",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "rules_swift", version = "3.6.1")
+bazel_dep(name = "rules_swift_package_manager", version = "1.20.0")
+
+swift_deps = use_extension(
+    "@rules_swift_package_manager//:extensions.bzl",
+    "swift_deps",
+)
+swift_deps.from_package(
+    resolved = "//:Package.resolved",
+    swift = "//:Package.swift",
+)
+swift_deps.configure_package(
+    name = "tree-sitter-swift",
+    build_file = "//third_party:tree_sitter_swift.BUILD.bazel",
+)
+use_repo(
+    swift_deps,
+    "swift_package",
+    "swiftpkg_swift_tree_sitter",
+    "swiftpkg_tree_sitter_swift",
+)
+
+ghostty_deps = use_extension("//third_party:ghostty_deps.bzl", "ghostty_deps")
+ghostty_deps.dependency(
+    name = "ghostty_kit",
+    commit = "05c3e2908f95892b180c3e5d770abe7a88b42c42",
+    local_xcframework_path = "GhosttyKit.xcframework",
+)
+use_repo(ghostty_deps, "ghostty_kit")

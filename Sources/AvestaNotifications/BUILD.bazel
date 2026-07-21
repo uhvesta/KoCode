@@ -1,0 +1,17 @@
+load("@rules_swift//swift:swift_library.bzl", "swift_library")
+
+swift_library(
+    name = "AvestaNotifications",
+    package_name = "AvestaCode",
+    srcs = glob(["**/*.swift"]),
+    copts = ["-enable-testing"],
+    module_name = "AvestaNotifications",
+    visibility = [
+        "//App:__pkg__",
+        "//Tests/AvestaNotificationsTests:__pkg__",
+    ],
+    deps = [
+        "//Sources/AvestaCore",
+        "//Sources/AvestaTerminal",
+    ],
+)

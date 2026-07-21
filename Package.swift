@@ -15,32 +15,35 @@ let package = Package(
         .library(name: "AvestaNotifications", targets: ["AvestaNotifications"])
     ],
     dependencies: [
-        .package(url: "https://github.com/pointfreeco/swift-composable-architecture", exact: "1.26.0"),
-        .package(url: "https://github.com/pointfreeco/swift-snapshot-testing", from: "1.12.0"),
         .package(url: "https://github.com/tree-sitter/swift-tree-sitter", from: "0.10.0"),
         .package(url: "https://github.com/alex-pinkus/tree-sitter-swift", branch: "with-generated-files")
     ],
     targets: [
+        .systemLibrary(
+            name: "CSQLite",
+            path: "Sources/CSQLite"
+        ),
         .executableTarget(
             name: "AvestaCode",
             dependencies: [
                 "AvestaUI",
                 "AvestaNotifications",
-                .product(name: "ComposableArchitecture", package: "swift-composable-architecture")
+                "AvestaTerminal"
             ],
             path: "App",
-            exclude: ["Info.plist", "Assets.xcassets"]
+            exclude: ["Info.plist", "Assets.xcassets", "BUILD.bazel"]
         ),
         .target(
             name: "AvestaCore",
-            dependencies: [
-                .product(name: "ComposableArchitecture", package: "swift-composable-architecture")
-            ]
+            dependencies: ["CSQLite"],
+            exclude: ["BUILD.bazel"],
+            linkerSettings: [.linkedLibrary("sqlite3"), .linkedLibrary("compression")]
         ),
         .binaryTarget(name: "GhosttyKit", path: "GhosttyKit.xcframework"),
         .target(
             name: "AvestaTerminal",
             dependencies: ["AvestaCore", "GhosttyKit"],
+            exclude: ["BUILD.bazel"],
             linkerSettings: [
                 .linkedFramework("Carbon"),
                 .linkedFramework("GameController"),
@@ -52,39 +55,34 @@ let package = Package(
             dependencies: [
                 "AvestaCore",
                 "AvestaTerminal",
-                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "SwiftTreeSitter", package: "swift-tree-sitter"),
                 .product(name: "TreeSitterSwift", package: "tree-sitter-swift")
-            ]
+            ],
+            exclude: ["BUILD.bazel"]
         ),
-        .target(
-            name: "AvestaNotifications",
-            dependencies: ["AvestaCore", "AvestaTerminal"]
-        ),
+        .target(name: "AvestaNotifications", dependencies: ["AvestaCore", "AvestaTerminal"], exclude: ["BUILD.bazel"]),
         .testTarget(
             name: "AvestaCoreTests",
-            dependencies: [
-                "AvestaCore",
-                .product(name: "SnapshotTesting", package: "swift-snapshot-testing")
-            ],
-            exclude: ["__Snapshots__"]
+            dependencies: ["AvestaCore"],
+            exclude: ["__Snapshots__", "BUILD.bazel"]
         ),
         .testTarget(
             name: "AvestaNotificationsTests",
-            dependencies: ["AvestaNotifications"]
+            dependencies: ["AvestaNotifications"],
+            exclude: ["BUILD.bazel"]
         ),
         .testTarget(
             name: "AvestaUITests",
             dependencies: [
                 "AvestaUI",
-                "AvestaCore",
-                .product(name: "SnapshotTesting", package: "swift-snapshot-testing")
+                "AvestaCore"
             ],
-            exclude: ["__Snapshots__", "README.md"]
+            exclude: ["__Snapshots__", "BUILD.bazel"]
         ),
         .testTarget(
             name: "AvestaTerminalTests",
-            dependencies: ["AvestaTerminal"]
+            dependencies: ["AvestaTerminal"],
+            exclude: ["BUILD.bazel"]
         )
     ]
 )

@@ -3,110 +3,56 @@ import AvestaCore
 import SwiftUI
 
 public struct TerminalSurfaceView: NSViewRepresentable {
-    public let workingDirectory: URL
     public let tabID: UUID
-    public let pendingPaste: String?
-    public let resume: TerminalResumeSnapshot?
-    public var onOutput: (String) -> Void
-    public var onPasteConsumed: () -> Void
+    public let workingDirectory: URL
+    public let startupInput: String?
+    public let scrollback: ScrollbackPolicy
+    public let pendingInput: TerminalInputRequest?
+    public var onInputConsumed: (UUID) -> Void
+    public var onFocus: () -> Void
+    public var onEvent: (GhosttyRuntimeEvent) -> Void
+    public var onObservedOutput: (String) -> Void
 
-    public init(
-        workingDirectory: URL,
-        tabModel: TerminalTabModel,
-        onOutput: @escaping (String) -> Void = { _ in }
-    ) {
-        self.workingDirectory = workingDirectory
-        self.tabID = tabModel.id
-        self.pendingPaste = tabModel.pendingPaste
-        self.resume = tabModel.resume
-        self.onOutput = onOutput
-        self.onPasteConsumed = {}
-    }
-
-    public init(
-        workingDirectory: URL,
-        tabID: UUID,
-        pendingPaste: String?,
-        resume: TerminalResumeSnapshot?,
-        onOutput: @escaping (String) -> Void = { _ in },
-        onPasteConsumed: @escaping () -> Void = {}
-    ) {
-        self.workingDirectory = workingDirectory
+    public init(tabID: UUID, workingDirectory: URL, startupInput: String? = nil, scrollback: ScrollbackPolicy = .limited(lines: 10_000), pendingInput: TerminalInputRequest? = nil, onInputConsumed: @escaping (UUID) -> Void = { _ in }, onFocus: @escaping () -> Void = {}, onEvent: @escaping (GhosttyRuntimeEvent) -> Void = { _ in }, onObservedOutput: @escaping (String) -> Void = { _ in }) {
         self.tabID = tabID
-        self.pendingPaste = pendingPaste
-        self.resume = resume
-        self.onOutput = onOutput
-        self.onPasteConsumed = onPasteConsumed
+        self.workingDirectory = workingDirectory
+        self.startupInput = startupInput
+        self.scrollback = scrollback
+        self.pendingInput = pendingInput
+        self.onInputConsumed = onInputConsumed
+        self.onFocus = onFocus
+        self.onEvent = onEvent
+        self.onObservedOutput = onObservedOutput
     }
 
     public func makeNSView(context: Context) -> TerminalMetalView {
-        let view = TerminalMetalView()
-        view.createSurface(
-            workingDirectory: workingDirectory,
-            startupInput: resume.map { $0.command + "\n" },
-            onOutput: { output in
-                onOutput(output)
-            },
-            onExit: {}
-        )
-        return view
+        TerminalSurfaceRegistry.shared.view(tabID: tabID, workingDirectory: workingDirectory, startupInput: startupInput, scrollback: scrollback, onFocus: onFocus, onEvent: onEvent, onObservedOutput: onObservedOutput)
     }
 
-    public func updateNSView(_ nsView: TerminalMetalView, context: Context) {
-        nsView.toolTip = workingDirectory.path
-        if let pendingPaste {
-            nsView.paste(pendingPaste)
-            onPasteConsumed()
+    public func updateNSView(_ view: TerminalMetalView, context: Context) {
+        view.updateHandlers(onFocus: onFocus, onEvent: onEvent, onObservedOutput: onObservedOutput)
+        if let pendingInput, context.coordinator.lastInputID != pendingInput.id {
+            view.insertReviewText(pendingInput.text)
+            context.coordinator.lastInputID = pendingInput.id
+            onInputConsumed(pendingInput.id)
         }
+        if view.window?.firstResponder === view { onFocus() }
     }
 
-    public final class Coordinator {
-        public init() {}
-    }
+    public func makeCoordinator() -> Coordinator { Coordinator() }
+    public final class Coordinator { var lastInputID: UUID? }
 
-    public func makeCoordinator() -> Coordinator {
-        Coordinator()
+    public static func dismantleNSView(_ nsView: TerminalMetalView, coordinator: Coordinator) {
+        // The tab-scoped registry intentionally keeps the live Ghostty surface across tab
+        // selection and companion docking. Permanent tab close releases it explicitly.
     }
 }
 #else
 import AvestaCore
 import SwiftUI
-
 public struct TerminalSurfaceView: View {
-    public let workingDirectory: URL
-    public let tabID: UUID
-    public let pendingPaste: String?
-    public let resume: TerminalResumeSnapshot?
-    public var onOutput: (String) -> Void
-    public var onPasteConsumed: () -> Void
-
-    public init(workingDirectory: URL, tabModel: TerminalTabModel, onOutput: @escaping (String) -> Void = { _ in }) {
-        self.workingDirectory = workingDirectory
-        self.tabID = tabModel.id
-        self.pendingPaste = tabModel.pendingPaste
-        self.resume = tabModel.resume
-        self.onOutput = onOutput
-        self.onPasteConsumed = {}
-    }
-
-    public init(
-        workingDirectory: URL,
-        tabID: UUID,
-        pendingPaste: String?,
-        resume: TerminalResumeSnapshot?,
-        onOutput: @escaping (String) -> Void = { _ in },
-        onPasteConsumed: @escaping () -> Void = {}
-    ) {
-        self.workingDirectory = workingDirectory
-        self.tabID = tabID
-        self.pendingPaste = pendingPaste
-        self.resume = resume
-        self.onOutput = onOutput
-        self.onPasteConsumed = onPasteConsumed
-    }
-
-    public var body: some View {
-        Text("Terminal unavailable on this platform")
-    }
+    public init(tabID: UUID, workingDirectory: URL, startupInput: String? = nil, scrollback: ScrollbackPolicy = .limited(lines: 10_000), pendingInput: TerminalInputRequest? = nil, onInputConsumed: @escaping (UUID) -> Void = { _ in }, onFocus: @escaping () -> Void = {}, onEvent: @escaping (GhosttyRuntimeEvent) -> Void = { _ in }, onObservedOutput: @escaping (String) -> Void = { _ in }) {}
+    public var body: some View { Text("Terminal unavailable") }
 }
+public enum GhosttyRuntimeEvent: Sendable { case closeRequested }
 #endif

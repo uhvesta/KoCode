@@ -1,0 +1,101 @@
+load("@build_bazel_rules_swift//swift:swift.bzl", "swift_interop_hint", "swift_library_group")
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_license//rules:license.bzl", "license")
+load("@rules_license//rules:package_info.bzl", "package_info")
+load("@rules_swift_package_manager//swiftpkg/internal:minimum_os_transition.bzl", "spm_minimum_os_target")
+load("@rules_swift_package_manager//swiftpkg:build_defs.bzl", "generate_modulemap")
+
+package(
+    default_package_metadata = [
+        ":license.rspm",
+        ":package_info.rspm",
+    ],
+)
+
+exports_files(
+    ["pkg_info.json"] + glob(["queries/**"]),
+)
+
+cc_library(
+    name = "TreeSitterSwift.rspm.__impl",
+    tags = ["manual"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":TreeSitterSwift.rspm_modulemap",
+        ":TreeSitterSwift.rspm_c",
+    ],
+)
+
+cc_library(
+    name = "TreeSitterSwift.rspm_c",
+    srcs = [
+        "src/parser.c",
+        "src/scanner.c",
+        "src/tree_sitter/alloc.h",
+        "src/tree_sitter/array.h",
+        "src/tree_sitter/parser.h",
+    ],
+    hdrs = ["bindings/swift/TreeSitterSwift/swift.h"],
+    textual_hdrs = [
+        "src/parser.c",
+        "src/scanner.c",
+    ],
+    alwayslink = True,
+    aspect_hints = ["TreeSitterSwift.rspm_swift_hint"],
+    copts = [
+        "-fblocks",
+        "-fobjc-arc",
+        "-fPIC",
+        "-DSWIFT_PACKAGE=1",
+        "-fmodule-name=TreeSitterSwift",
+        "-Iexternal/rules_swift_package_manager++swift_deps+swiftpkg_tree_sitter_swift/src",
+        "-std=c11",
+    ] + select({
+        "@rules_swift_package_manager//config_settings/bazel/compilation_mode:dbg": ["-DDEBUG=1"],
+        "//conditions:default": [],
+    }),
+    includes = ["bindings/swift"],
+    visibility = ["//:__subpackages__"],
+)
+
+generate_modulemap(
+    name = "TreeSitterSwift.rspm_modulemap",
+    hdrs = ["bindings/swift/TreeSitterSwift/swift.h"],
+    module_name = "TreeSitterSwift",
+    visibility = ["//:__subpackages__"],
+)
+
+license(
+    name = "license.rspm",
+    license_text = "LICENSE",
+)
+
+package_info(
+    name = "package_info.rspm",
+    package_name = "TreeSitterSwift",
+    package_url = "https://github.com/alex-pinkus/tree-sitter-swift",
+    package_version = "",
+)
+
+spm_minimum_os_target(
+    name = "TreeSitterSwift.rspm",
+    deps = [":TreeSitterSwift.rspm.__impl"],
+    ios_minimum_os = "11.0",
+    macos_minimum_os = "10.13",
+    tvos_minimum_os = "12.0",
+    visibility = ["//:__subpackages__"],
+    visionos_minimum_os = "1.0",
+    watchos_minimum_os = "4.0",
+)
+
+swift_interop_hint(
+    name = "TreeSitterSwift.rspm_swift_hint",
+    module_map = "TreeSitterSwift.rspm_modulemap",
+    module_name = "TreeSitterSwift",
+)
+
+swift_library_group(
+    name = "TreeSitterSwift",
+    deps = ["@swiftpkg_tree_sitter_swift//:TreeSitterSwift.rspm"],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,37 @@
+load("@rules_swift//swift:swift_library.bzl", "swift_library")
+
+filegroup(
+    name = "source_files",
+    srcs = glob(["*.swift"]),
+    visibility = ["//Tests/AvestaTerminalTests:__pkg__"],
+)
+
+swift_library(
+    name = "AvestaTerminal",
+    package_name = "AvestaCode",
+    srcs = glob(["**/*.swift"]),
+    copts = ["-enable-testing"],
+    linkopts = [
+        "-framework",
+        "AppKit",
+        "-framework",
+        "Carbon",
+        "-framework",
+        "GameController",
+        "-framework",
+        "Metal",
+        "-framework",
+        "QuartzCore",
+    ],
+    module_name = "AvestaTerminal",
+    visibility = [
+        "//App:__pkg__",
+        "//Sources/AvestaNotifications:__pkg__",
+        "//Sources/AvestaUI:__pkg__",
+        "//Tests/AvestaTerminalTests:__pkg__",
+    ],
+    deps = [
+        "//Sources/AvestaCore",
+        "@ghostty_kit//:GhosttyKit",
+    ],
+)

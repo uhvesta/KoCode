@@ -1,0 +1,9 @@
+common --enable_bzlmod
+common --enable_platform_specific_config
+
+build --action_env=PATH
+build --repo_env=PATH
+build --macos_minimum_os=14.0
+build --announce_rc
+
+test --test_output=errors

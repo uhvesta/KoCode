@@ -1,44 +1,39 @@
 import AvestaCore
-import ComposableArchitecture
 import SwiftUI
 
 public struct SettingsView: View {
-    let store: StoreOf<AppFeature>
-
-    public init(store: StoreOf<AppFeature>) {
-        self.store = store
-    }
+    let model: ApplicationModel
+    public init(model: ApplicationModel) { self.model = model }
 
     public var body: some View {
         Form {
-            Section("Paths") {
-                TextField("Workspaces Root", text: Binding(
-                    get: { store.settings.config.workspacesRoot.path },
-                    set: { store.send(.settings(.workspacesRootChanged($0))) }
-                ))
-                TextField("Cache Root", text: Binding(
-                    get: { store.settings.config.cacheRoot.path },
-                    set: { store.send(.settings(.cacheRootChanged($0))) }
-                ))
+            Picker("Default Git base branch", selection: Binding(
+                get: { model.defaultBaseBranch },
+                set: { value in Task { await model.setDefaultBaseBranch(value) } }
+            )) {
+                Text("origin/main").tag("origin/main")
+                Text("origin/master").tag("origin/master")
             }
-
-            Section("Notification Patterns") {
-                ForEach(store.settings.config.notificationPatterns.indices, id: \.self) { index in
-                    TextField("Pattern", text: Binding(
-                        get: { store.settings.config.notificationPatterns[index] },
-                        set: { store.send(.settings(.notificationPatternChanged(index: index, value: $0))) }
-                    ))
-                        .font(.system(.body, design: .monospaced))
-                }
-
-                Button {
-                    store.send(.settings(.addNotificationPatternButtonTapped))
-                } label: {
-                    Label("Add Pattern", systemImage: "plus")
-                }
+            Picker("Default terminal scrollback", selection: Binding(
+                get: { storageValue(model.globalScrollback) },
+                set: { value in Task { await model.setGlobalScrollback(policy(value)) } }
+            )) {
+                Text("Disabled").tag("disabled")
+                Text("10,000 lines").tag("limited")
+                Text("Unlimited").tag("unlimited")
             }
+            LabeledContent("Database", value: model.config.databaseURL.path)
+            LabeledContent("Shared repository cache", value: model.config.cacheRoot.path)
+            Text("Ghostty loads your normal configuration. AvestaCode-specific overrides and terminal scrollback choices are stored in SQLite and applied through libghostty configuration APIs.")
+                .font(.caption).foregroundStyle(.secondary)
         }
-        .padding(20)
-        .frame(width: 560, height: 360)
+        .padding(20).frame(width: 560)
+    }
+
+    private func storageValue(_ policy: ScrollbackPolicy) -> String {
+        switch policy { case .disabled: return "disabled"; case .limited: return "limited"; case .unlimited: return "unlimited" }
+    }
+    private func policy(_ value: String) -> ScrollbackPolicy {
+        switch value { case "disabled": return .disabled; case "unlimited": return .unlimited; default: return .limited(lines: 10_000) }
     }
 }

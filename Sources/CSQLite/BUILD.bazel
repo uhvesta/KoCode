@@ -1,0 +1,19 @@
+load("@rules_swift//swift:swift_interop_hint.bzl", "swift_interop_hint")
+
+swift_interop_hint(
+    name = "CSQLite_swift_interop",
+    module_map = "module.modulemap",
+    module_name = "CSQLite",
+)
+
+cc_library(
+    name = "CSQLite",
+    hdrs = [
+        "module.modulemap",
+        "sqlite3_shim.h",
+    ],
+    aspect_hints = [":CSQLite_swift_interop"],
+    includes = ["."],
+    linkopts = ["-lsqlite3"],
+    visibility = ["//visibility:public"],
+)

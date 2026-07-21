@@ -1,7 +1,8 @@
 import Foundation
 
 public enum TerminalOutputSanitizer {
-    public static func displayText(from output: String) -> String {
+    /// Produces plain metadata for notifications/search. This output is never rendered as a terminal.
+    public static func notificationText(from output: String) -> String {
         var result = ""
         var index = output.startIndex
 

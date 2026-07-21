@@ -1,0 +1,23 @@
+exports_files([
+    "GhosttyKit.xcframework/.ghostty_sha",
+    "MODULE.bazel",
+    "Package.resolved",
+    "Package.swift",
+])
+
+alias(
+    name = "AvestaCode",
+    actual = "//App:AvestaCode",
+    visibility = ["//visibility:public"],
+)
+
+test_suite(
+    name = "all_tests",
+    tests = [
+        "//Tests/AvestaCoreTests",
+        "//Tests/AvestaNotificationsTests",
+        "//Tests/AvestaTerminalTests",
+        "//Tests/AvestaUITests",
+    ],
+    visibility = ["//visibility:public"],
+)
