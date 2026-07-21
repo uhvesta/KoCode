@@ -316,6 +316,18 @@ public final class ApplicationModel {
         queueTerminalInput(tabID: tabID, text: TerminalReviewHandoff.format(repository: repositoryItem, filePath: annotation.filePath, side: annotation.side, startLine: annotation.startLine, endLine: annotation.endLine, excerpt: annotation.selectedCode, userText: annotation.userText))
     }
 
+    @discardableResult
+    public func sendReviewBundleToTerminal(workspaceID: UUID, annotations: [ReviewAnnotation], targetTabID: UUID) -> Bool {
+        guard let workspace = workspaces.first(where: { $0.id == workspaceID }),
+              workspace.tabs.contains(where: { $0.id == targetTabID && $0.kind == .terminal }),
+              !annotations.isEmpty else { return false }
+        queueTerminalInput(
+            tabID: targetTabID,
+            text: WorkspaceReviewBundleFormatter.format(workspace: workspace, annotations: annotations)
+        )
+        return true
+    }
+
     public func refreshReview(workspaceID: UUID, reason: String = "refresh") async {
         guard let workspace = workspaces.first(where: { $0.id == workspaceID }) else { return }
         var state = reviewStates[workspaceID] ?? WorkspaceReviewState(workspaceID: workspaceID)
@@ -416,6 +428,26 @@ public final class ApplicationModel {
         } catch { report(error); return nil }
     }
 
+    @discardableResult
+    public func updateAnnotationText(_ annotation: ReviewAnnotation, text: String) async -> Bool {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return false }
+        do {
+            try await repository.updateAnnotationText(id: annotation.id, text: value)
+            await reloadAnnotations(workspaceID: annotation.workspaceID)
+            return true
+        } catch { report(error); return false }
+    }
+
+    @discardableResult
+    public func deleteAnnotation(_ annotation: ReviewAnnotation) async -> Bool {
+        do {
+            try await repository.deleteAnnotation(id: annotation.id)
+            await reloadAnnotations(workspaceID: annotation.workspaceID)
+            return true
+        } catch { report(error); return false }
+    }
+
     public func askAssistant(annotation: ReviewAnnotation, provider: AssistantProvider) async {
         guard let workspace = workspaces.first(where: { $0.id == annotation.workspaceID }), let repositoryItem = workspace.repositories.first(where: { $0.id == annotation.repositoryID }) else { return }
         let thread = AssistantThreadRecord(id: UUID(), annotationID: annotation.id, provider: provider, providerSessionID: nil, model: nil, createdAt: Date())
@@ -496,6 +528,14 @@ public final class ApplicationModel {
             repositorySources = try await repository.loadRepositorySources()
             try await loadTerminalPolicies()
             if !workspaces.contains(where: { $0.id == activeWorkspaceID }) { activeWorkspaceID = workspaces.first?.id }
+        } catch { report(error) }
+    }
+
+    private func reloadAnnotations(workspaceID: UUID) async {
+        do {
+            var state = reviewStates[workspaceID] ?? WorkspaceReviewState(workspaceID: workspaceID)
+            state.annotations = try await repository.annotations(workspaceID: workspaceID)
+            reviewStates[workspaceID] = state
         } catch { report(error) }
     }
 

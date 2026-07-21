@@ -94,6 +94,36 @@ final class SQLiteStateRepositoryTests: XCTestCase {
         XCTAssertNotEqual(next.id, session.id)
     }
 
+    func testCommentCanBeEditedAndDeletedWithAssistantThreadCascade() async throws {
+        let root = temporaryRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let databaseURL = root.appending(path: "state.sqlite3")
+        let repository = try SQLiteStateRepository(databaseURL: databaseURL)
+        try await repository.initialize()
+        let workspace = try await repository.createWorkspace(name: "Demo", path: root.appending(path: "workspace"))
+        let source = try await repository.upsertRepositorySource(remoteURL: "https://example.com/repo", cachePath: root.appending(path: "repo.git"))
+        let worktree = WorkspaceRepositoryRecord(workspaceID: workspace.id, sourceID: source.id, name: "repo", worktreePath: root.appending(path: "workspace/repo"), branch: "main")
+        try await repository.addWorkspaceRepository(worktree)
+        let snapshot = try await repository.saveSnapshot(ReviewSnapshotRecord(workspaceID: workspace.id, activitySessionID: workspace.activitySessionID, fingerprint: "fp", reason: "comment", repositories: []))
+        let session = try await repository.ensureReviewSession(workspaceID: workspace.id, activitySessionID: workspace.activitySessionID)
+        let annotation = ReviewAnnotation(workspaceID: workspace.id, activitySessionID: workspace.activitySessionID, reviewSessionID: session.id, repositoryID: worktree.id, snapshotID: snapshot.id, kind: .comment, filePath: "a.swift", side: .new, startLine: 2, endLine: 3, anchorFingerprint: "anchor", selectedCode: "code", context: "context", userText: "original")
+        let thread = AssistantThreadRecord(id: UUID(), annotationID: annotation.id, provider: .codex, providerSessionID: nil, model: nil, createdAt: Date())
+        let message = AssistantMessageRecord(id: UUID(), threadID: thread.id, role: .assistant, content: "answer", isStreaming: false, errorCode: nil, createdAt: Date())
+        try await repository.saveAnnotation(annotation)
+        try await repository.saveAssistantThread(thread)
+        try await repository.saveAssistantMessage(message)
+
+        try await repository.updateAnnotationText(id: annotation.id, text: "edited")
+        let editedAnnotations = try await repository.annotations(workspaceID: workspace.id)
+        XCTAssertEqual(editedAnnotations.first?.userText, "edited")
+
+        try await repository.deleteAnnotation(id: annotation.id)
+        let remainingAnnotations = try await repository.annotations(workspaceID: workspace.id)
+        XCTAssertTrue(remainingAnnotations.isEmpty)
+        let database = try SQLiteDatabase(url: databaseURL)
+        XCTAssertEqual(try database.scalarInt("SELECT COUNT(*) AS value FROM assistant_threads"), 0)
+        XCTAssertEqual(try database.scalarInt("SELECT COUNT(*) AS value FROM assistant_messages"), 0)
+    }
+
     func testRepositoryBankCanReorderAndDeleteSources() async throws {
         let root = temporaryRoot(); defer { try? FileManager.default.removeItem(at: root) }
         let repository = try SQLiteStateRepository(databaseURL: root.appending(path: "state.sqlite3")); try await repository.initialize()

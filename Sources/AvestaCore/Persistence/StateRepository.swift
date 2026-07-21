@@ -40,6 +40,8 @@ public protocol StateRepository: Sendable {
     func loadSnapshot(id: UUID) async throws -> ReviewSnapshotRecord?
     func saveAnnotation(_ annotation: ReviewAnnotation) async throws
     func annotations(workspaceID: UUID) async throws -> [ReviewAnnotation]
+    func updateAnnotationText(id: UUID, text: String) async throws
+    func deleteAnnotation(id: UUID) async throws
     func markAnnotationOutdated(id: UUID, isOutdated: Bool) async throws
     func saveAssistantThread(_ thread: AssistantThreadRecord) async throws
     func saveAssistantMessage(_ message: AssistantMessageRecord) async throws
@@ -376,6 +378,17 @@ public actor SQLiteStateRepository: StateRepository {
             guard let id = row.uuid("id"), let activityID = row.uuid("activity_session_id"), let reviewID = row.uuid("review_session_id"), let repositoryID = row.uuid("repository_id"), let snapshotID = row.uuid("snapshot_id"), let kindRaw = row.text("kind"), let kind = AnnotationKind(rawValue: kindRaw), let filePath = row.text("file_path"), let sideRaw = row.text("side"), let side = DiffSide(rawValue: sideRaw), let fingerprint = row.text("anchor_fingerprint"), let code = row.text("selected_code"), let context = row.text("surrounding_context"), let userText = row.text("user_text") else { return nil }
             return ReviewAnnotation(id: id, workspaceID: workspaceID, activitySessionID: activityID, reviewSessionID: reviewID, repositoryID: repositoryID, snapshotID: snapshotID, kind: kind, filePath: filePath, side: side, startLine: row.integer("start_line"), endLine: row.integer("end_line"), anchorFingerprint: fingerprint, selectedCode: code, context: context, userText: userText, response: row.text("response"), createdAt: row.date("created_at"), resolvedAt: row.optionalDate("resolved_at"), isOutdated: row.integer("is_outdated") != 0)
         }
+    }
+
+    public func updateAnnotationText(id: UUID, text: String) throws {
+        try database.execute(
+            "UPDATE review_annotations SET user_text=? WHERE id=?",
+            bindings: [.text(text), .uuid(id)]
+        )
+    }
+
+    public func deleteAnnotation(id: UUID) throws {
+        try database.execute("DELETE FROM review_annotations WHERE id=?", bindings: [.uuid(id)])
     }
 
     public func markAnnotationOutdated(id: UUID, isOutdated: Bool) throws {

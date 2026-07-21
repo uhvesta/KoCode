@@ -98,3 +98,52 @@ public enum TerminalReviewHandoff {
         """
     }
 }
+
+/// Produces a deterministic, portable review prompt that can either be copied
+/// or inserted through a Ghostty surface. It contains only AvestaCode-owned
+/// annotation data and never includes terminal output or credentials.
+public enum WorkspaceReviewBundleFormatter {
+    public static func format(workspace: WorkspaceRecord, annotations: [ReviewAnnotation]) -> String {
+        let repositoryOrder = Dictionary(uniqueKeysWithValues: workspace.repositories.enumerated().map { ($0.element.id, $0.offset) })
+        let repositoryNames = Dictionary(uniqueKeysWithValues: workspace.repositories.map { ($0.id, $0.name) })
+        let sorted = annotations.sorted {
+            let left = (repositoryOrder[$0.repositoryID] ?? Int.max, $0.filePath, $0.startLine, $0.createdAt)
+            let right = (repositoryOrder[$1.repositoryID] ?? Int.max, $1.filePath, $1.startLine, $1.createdAt)
+            if left.0 != right.0 { return left.0 < right.0 }
+            if left.1 != right.1 { return left.1 < right.1 }
+            if left.2 != right.2 { return left.2 < right.2 }
+            return left.3 < right.3
+        }
+
+        var sections = [
+            "Workspace review feedback for \"\(workspace.name)\"",
+            "",
+            "Please address every review item below. Preserve unrelated behavior and report how each item was handled."
+        ]
+        for (index, annotation) in sorted.enumerated() {
+            let repository = repositoryNames[annotation.repositoryID] ?? "Unknown repository"
+            let lineLabel = annotation.startLine == annotation.endLine
+                ? "line \(annotation.startLine)"
+                : "lines \(annotation.startLine)-\(annotation.endLine)"
+            let kind = annotation.kind == .comment ? "Comment" : "Question"
+            let outdated = annotation.isOutdated ? " [outdated anchor]" : ""
+            sections.append("""
+
+            ## \(index + 1). \(repository) — \(annotation.filePath) (\(annotation.side.rawValue) \(lineLabel))\(outdated)
+
+            \(kind):
+            \(annotation.userText)
+
+            Selected code:
+            \(indented(annotation.selectedCode))
+            """)
+        }
+        return sections.joined(separator: "\n")
+    }
+
+    private static func indented(_ value: String) -> String {
+        let lines = value.split(separator: "\n", omittingEmptySubsequences: false)
+        guard !lines.isEmpty else { return "    (no source excerpt)" }
+        return lines.map { "    \($0)" }.joined(separator: "\n")
+    }
+}

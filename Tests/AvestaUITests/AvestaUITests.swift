@@ -13,6 +13,31 @@ final class AvestaUITests: XCTestCase {
         XCTAssertNotNil(MainWindow(model: model))
     }
 
+    func testCommentFocusMatchesEveryLineInAnAnchoredRange() {
+        let repositoryID = UUID()
+        let focus = ReviewCommentFocus(repositoryID: repositoryID, filePath: "File.swift", side: .new, line: 5)
+        let annotation = ReviewAnnotation(
+            workspaceID: UUID(),
+            activitySessionID: UUID(),
+            reviewSessionID: UUID(),
+            repositoryID: repositoryID,
+            snapshotID: UUID(),
+            kind: .comment,
+            filePath: "File.swift",
+            side: .new,
+            startLine: 3,
+            endLine: 7,
+            anchorFingerprint: "anchor",
+            selectedCode: "code",
+            context: "context",
+            userText: "comment"
+        )
+
+        XCTAssertTrue(focus.matches(annotation))
+        XCTAssertFalse(ReviewCommentFocus(repositoryID: repositoryID, filePath: "File.swift", side: .old, line: 5).matches(annotation))
+        XCTAssertFalse(ReviewCommentFocus(repositoryID: repositoryID, filePath: "File.swift", side: .new, line: 8).matches(annotation))
+    }
+
     func testSwiftSyntaxHighlighterAppliesForegroundAttributes() {
         let lines = SwiftSyntaxHighlighter.highlightedLines(for: "import SwiftUI\nstruct View {}", path: "View.swift")
         XCTAssertTrue(lines.flatMap(\.content.runs).contains { $0.foregroundColor != nil })
