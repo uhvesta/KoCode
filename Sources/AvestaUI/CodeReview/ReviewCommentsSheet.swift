@@ -20,24 +20,32 @@ struct ReviewCommentsSheet: View {
     @Environment(\.dismiss) private var dismiss
     let model: ApplicationModel
     let workspace: WorkspaceRecord
-    let initialFocus: ReviewCommentFocus?
+    let canReveal: (ReviewAnnotation) -> Bool
+    let onReveal: (ReviewAnnotation) -> Void
 
     @State private var selectedIDs: Set<UUID> = []
-    @State private var showAll = false
+    @State private var focusedAnnotationID: UUID?
     @State private var targetTerminalID: UUID?
     @State private var statusMessage: String?
 
     private var annotations: [ReviewAnnotation] {
-        model.reviewStates[workspace.id]?.annotations ?? []
-    }
-    private var visibleAnnotations: [ReviewAnnotation] {
-        guard !showAll, let initialFocus else { return annotations }
-        return annotations.filter(initialFocus.matches)
+        WorkspaceReviewBundleFormatter.ordered(
+            workspace: workspace,
+            annotations: model.reviewStates[workspace.id]?.annotations ?? []
+        )
     }
     private var selectedAnnotations: [ReviewAnnotation] {
         annotations.filter { selectedIDs.contains($0.id) }
     }
     private var terminals: [TabRecord] { workspace.tabs.filter { $0.kind == .terminal } }
+    private var focusedAnnotation: ReviewAnnotation? {
+        annotations.first { $0.id == focusedAnnotationID } ?? annotations.first
+    }
+    private var focusedPosition: String? {
+        guard let focusedAnnotation,
+              let index = annotations.firstIndex(where: { $0.id == focusedAnnotation.id }) else { return nil }
+        return "\(index + 1) of \(annotations.count)"
+    }
     private var bundle: String {
         WorkspaceReviewBundleFormatter.format(workspace: workspace, annotations: selectedAnnotations)
     }
@@ -48,11 +56,14 @@ struct ReviewCommentsSheet: View {
                 Label("Review Comments", systemImage: "text.bubble")
                     .font(.title3.bold())
                 Text("\(annotations.count)").foregroundStyle(.secondary)
-                if initialFocus != nil && !showAll {
-                    Text("Showing comments on the selected line").font(.caption).foregroundStyle(.secondary)
-                    Button("Show All") { showAll = true }
-                }
                 Spacer()
+                if let focusedPosition { Text(focusedPosition).font(.caption).foregroundStyle(.secondary) }
+                Button { moveFocus(-1) } label: { Label("Previous", systemImage: "chevron.up") }
+                    .disabled(annotations.count < 2)
+                Button { moveFocus(1) } label: { Label("Next", systemImage: "chevron.down") }
+                    .disabled(annotations.count < 2)
+                Button("Show in Diff") { revealFocused() }
+                    .disabled(focusedAnnotation.map { !canReveal($0) } ?? true)
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
             .padding(14)
@@ -74,10 +85,12 @@ struct ReviewCommentsSheet: View {
         .frame(minWidth: 900, minHeight: 620)
         .onAppear {
             selectedIDs = Set(annotations.map(\.id))
+            focusedAnnotationID = annotations.first?.id
             targetTerminalID = preferredTerminalID
         }
         .onChange(of: annotations.map(\.id)) { _, ids in
             selectedIDs.formIntersection(ids)
+            if focusedAnnotationID.map({ !ids.contains($0) }) ?? true { focusedAnnotationID = ids.first }
         }
     }
 
@@ -93,24 +106,32 @@ struct ReviewCommentsSheet: View {
             }
             .padding(12)
             Divider()
-            ScrollView {
-                LazyVStack(spacing: 10) {
-                    ForEach(visibleAnnotations) { annotation in
-                        ReviewCommentCard(
-                            model: model,
-                            workspace: workspace,
-                            annotation: annotation,
-                            isIncluded: Binding(
-                                get: { selectedIDs.contains(annotation.id) },
-                                set: { included in
-                                    if included { selectedIDs.insert(annotation.id) }
-                                    else { selectedIDs.remove(annotation.id) }
-                                }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        ForEach(annotations) { annotation in
+                            ReviewCommentCard(
+                                model: model,
+                                workspace: workspace,
+                                annotation: annotation,
+                                isIncluded: Binding(
+                                    get: { selectedIDs.contains(annotation.id) },
+                                    set: { included in
+                                        if included { selectedIDs.insert(annotation.id) }
+                                        else { selectedIDs.remove(annotation.id) }
+                                    }
+                                ),
+                                isFocused: annotation.id == focusedAnnotation?.id,
+                                onFocus: { focusedAnnotationID = annotation.id }
                             )
-                        )
+                            .id(annotation.id)
+                        }
                     }
+                    .padding(12)
                 }
-                .padding(12)
+                .onChange(of: focusedAnnotationID) { _, id in
+                    if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+                }
             }
         }
     }
@@ -186,6 +207,20 @@ struct ReviewCommentsSheet: View {
             statusMessage = "Inserted into \(terminal.title) without executing."
         }
     }
+
+    private func moveFocus(_ offset: Int) {
+        focusedAnnotationID = ReviewAnnotationNavigation.adjacentID(
+            in: annotations,
+            currentID: focusedAnnotation?.id,
+            offset: offset
+        )
+    }
+
+    private func revealFocused() {
+        guard let focusedAnnotation, canReveal(focusedAnnotation) else { return }
+        onReveal(focusedAnnotation)
+        dismiss()
+    }
 }
 
 private struct ReviewCommentCard: View {
@@ -193,6 +228,8 @@ private struct ReviewCommentCard: View {
     let workspace: WorkspaceRecord
     let annotation: ReviewAnnotation
     @Binding var isIncluded: Bool
+    let isFocused: Bool
+    let onFocus: () -> Void
 
     @State private var isEditing = false
     @State private var draft = ""
@@ -211,8 +248,13 @@ private struct ReviewCommentCard: View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .firstTextBaseline) {
                 Toggle("Include", isOn: $isIncluded).labelsHidden()
-                Text(repositoryName).font(.caption).foregroundStyle(.secondary)
-                Text(annotation.filePath).font(.system(.caption, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                Button(action: onFocus) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(repositoryName).font(.caption).foregroundStyle(.secondary)
+                        Text(annotation.filePath).font(.system(.caption, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                    }
+                }
+                .buttonStyle(.plain)
                 Spacer()
                 if annotation.isOutdated { Text("Outdated").font(.caption2).foregroundStyle(.orange) }
                 Text(lineLabel).font(.caption).foregroundStyle(.secondary)
@@ -254,9 +296,77 @@ private struct ReviewCommentCard: View {
             }
         }
         .padding(12)
-        .background(.background)
+        .background(isFocused ? Color.accentColor.opacity(0.09) : Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.separator))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(isFocused ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: isFocused ? 2 : 1))
+        .alert("Delete Comment?", isPresented: $confirmingDelete) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) { Task { _ = await model.deleteAnnotation(annotation) } }
+        } message: {
+            Text("This permanently removes the comment and any associated assistant thread.")
+        }
+    }
+}
+
+struct InlineReviewThread: View {
+    let model: ApplicationModel
+    let annotations: [ReviewAnnotation]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(annotations) { annotation in
+                InlineReviewComment(model: model, annotation: annotation)
+                if annotation.id != annotations.last?.id { Divider().padding(.leading, 34) }
+            }
+        }
+        .padding(.vertical, 4)
+        .background(Color.accentColor.opacity(0.055))
+        .overlay(alignment: .leading) { Rectangle().fill(Color.accentColor).frame(width: 3) }
+    }
+}
+
+private struct InlineReviewComment: View {
+    let model: ApplicationModel
+    let annotation: ReviewAnnotation
+    @State private var editing = false
+    @State private var draft = ""
+    @State private var confirmingDelete = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Image(systemName: annotation.kind == .comment ? "person.crop.circle.fill" : "questionmark.circle.fill")
+                    .foregroundStyle(.secondary)
+                Text(annotation.kind == .comment ? "You commented" : "You asked")
+                    .font(.caption.bold())
+                Text(annotation.createdAt.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption2).foregroundStyle(.tertiary)
+                if annotation.isOutdated { Text("Outdated").font(.caption2).foregroundStyle(.orange) }
+                Spacer()
+                if !editing {
+                    Button("Edit") { draft = annotation.userText; editing = true }.buttonStyle(.link)
+                    Button("Delete", role: .destructive) { confirmingDelete = true }.buttonStyle(.link)
+                }
+            }
+            if editing {
+                TextEditor(text: $draft).frame(minHeight: 64)
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(.separator))
+                HStack {
+                    Spacer()
+                    Button("Cancel") { editing = false }
+                    Button("Save") {
+                        Task { if await model.updateAnnotationText(annotation, text: draft) { editing = false } }
+                    }
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            } else {
+                Text(annotation.userText).textSelection(.enabled)
+                if let response = annotation.response, !response.isEmpty {
+                    Text(response).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
         .alert("Delete Comment?", isPresented: $confirmingDelete) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) { Task { _ = await model.deleteAnnotation(annotation) } }

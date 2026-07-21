@@ -55,6 +55,21 @@ final class WorkspaceReviewBundleTests: XCTestCase {
         XCTAssertTrue(bundle.contains("    let z = 1\n    let y = 2"))
     }
 
+    func testCommentNavigationWrapsInReviewOrder() {
+        let workspaceID = UUID()
+        let activityID = UUID()
+        let reviewID = UUID()
+        let snapshotID = UUID()
+        let repositoryID = UUID()
+        let first = annotation(workspaceID: workspaceID, activityID: activityID, reviewID: reviewID, snapshotID: snapshotID, repositoryID: repositoryID, file: "a.swift", side: .new, lines: 1...1, code: "a", text: "first")
+        let second = annotation(workspaceID: workspaceID, activityID: activityID, reviewID: reviewID, snapshotID: snapshotID, repositoryID: repositoryID, file: "b.swift", side: .new, lines: 2...2, code: "b", text: "second")
+
+        XCTAssertEqual(ReviewAnnotationNavigation.adjacentID(in: [first, second], currentID: first.id, offset: 1), second.id)
+        XCTAssertEqual(ReviewAnnotationNavigation.adjacentID(in: [first, second], currentID: second.id, offset: 1), first.id)
+        XCTAssertEqual(ReviewAnnotationNavigation.adjacentID(in: [first, second], currentID: first.id, offset: -1), second.id)
+        XCTAssertNil(ReviewAnnotationNavigation.adjacentID(in: [], currentID: nil, offset: 1))
+    }
+
     @MainActor
     func testBundleCanTargetOneSpecificTerminalWithoutAppendingEnter() async throws {
         let root = temporaryRoot()

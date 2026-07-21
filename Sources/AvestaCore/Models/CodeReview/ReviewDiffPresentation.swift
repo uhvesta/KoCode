@@ -52,6 +52,15 @@ public struct ReviewDiffDocument: Hashable, Sendable {
         }.joined(separator: "\n")
     }
 
+    public func hunkID(side: DiffSide, intersecting lines: ClosedRange<Int>) -> String? {
+        hunks.first { hunk in
+            hunk.unifiedRows.contains { row in
+                let lineNumber = side == .old ? row.line.oldLineNumber : row.line.newLineNumber
+                return lineNumber.map(lines.contains) == true
+            }
+        }?.id
+    }
+
     public func fullFileTargetID(forHunkID hunkID: String) -> String? {
         guard let hunk = hunks.first(where: { $0.id == hunkID }) else { return nil }
         if displayedFullFileSide == .old { return "old:\(max(1, hunk.oldStart))" }

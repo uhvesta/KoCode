@@ -103,17 +103,21 @@ public enum TerminalReviewHandoff {
 /// or inserted through a Ghostty surface. It contains only AvestaCode-owned
 /// annotation data and never includes terminal output or credentials.
 public enum WorkspaceReviewBundleFormatter {
-    public static func format(workspace: WorkspaceRecord, annotations: [ReviewAnnotation]) -> String {
+    public static func ordered(workspace: WorkspaceRecord, annotations: [ReviewAnnotation]) -> [ReviewAnnotation] {
         let repositoryOrder = Dictionary(uniqueKeysWithValues: workspace.repositories.enumerated().map { ($0.element.id, $0.offset) })
-        let repositoryNames = Dictionary(uniqueKeysWithValues: workspace.repositories.map { ($0.id, $0.name) })
-        let sorted = annotations.sorted {
-            let left = (repositoryOrder[$0.repositoryID] ?? Int.max, $0.filePath, $0.startLine, $0.createdAt)
-            let right = (repositoryOrder[$1.repositoryID] ?? Int.max, $1.filePath, $1.startLine, $1.createdAt)
-            if left.0 != right.0 { return left.0 < right.0 }
-            if left.1 != right.1 { return left.1 < right.1 }
-            if left.2 != right.2 { return left.2 < right.2 }
-            return left.3 < right.3
+        return annotations.sorted {
+            let leftRepository = repositoryOrder[$0.repositoryID] ?? Int.max
+            let rightRepository = repositoryOrder[$1.repositoryID] ?? Int.max
+            if leftRepository != rightRepository { return leftRepository < rightRepository }
+            if $0.filePath != $1.filePath { return $0.filePath < $1.filePath }
+            if $0.startLine != $1.startLine { return $0.startLine < $1.startLine }
+            return $0.createdAt < $1.createdAt
         }
+    }
+
+    public static func format(workspace: WorkspaceRecord, annotations: [ReviewAnnotation]) -> String {
+        let repositoryNames = Dictionary(uniqueKeysWithValues: workspace.repositories.map { ($0.id, $0.name) })
+        let sorted = ordered(workspace: workspace, annotations: annotations)
 
         var sections = [
             "Workspace review feedback for \"\(workspace.name)\"",
@@ -145,5 +149,14 @@ public enum WorkspaceReviewBundleFormatter {
         let lines = value.split(separator: "\n", omittingEmptySubsequences: false)
         guard !lines.isEmpty else { return "    (no source excerpt)" }
         return lines.map { "    \($0)" }.joined(separator: "\n")
+    }
+}
+
+public enum ReviewAnnotationNavigation {
+    public static func adjacentID(in annotations: [ReviewAnnotation], currentID: UUID?, offset: Int) -> UUID? {
+        guard !annotations.isEmpty else { return nil }
+        let current = currentID.flatMap { id in annotations.firstIndex { $0.id == id } } ?? 0
+        let next = (current + offset % annotations.count + annotations.count) % annotations.count
+        return annotations[next].id
     }
 }

@@ -195,6 +195,23 @@ final class ReviewDiffPresentationTests: XCTestCase {
         )
     }
 
+    func testDocumentFindsTheHunkContainingAnAnnotationRangeOnEitherSide() {
+        let document = ReviewDiffDocument(file: fixture(
+            old: "one\nold\nthree",
+            new: "one\nnew\nthree",
+            lines: [
+                line(.context, 1, 1, "one"),
+                line(.removed, 2, nil, "old"),
+                line(.added, nil, 2, "new"),
+                line(.context, 3, 3, "three")
+            ]
+        ))
+
+        XCTAssertEqual(document.hunkID(side: .old, intersecting: 2...2), document.hunks[0].id)
+        XCTAssertEqual(document.hunkID(side: .new, intersecting: 2...3), document.hunks[0].id)
+        XCTAssertNil(document.hunkID(side: .new, intersecting: 20...21))
+    }
+
     func testPresentationIdentityIsStableAcrossEquivalentDiffInstances() {
         let first = ReviewDiffDocument(file: fixture(lines: [line(.added, nil, 1, "x")]))
         let second = ReviewDiffDocument(file: fixture(lines: [line(.added, nil, 1, "x")]))
