@@ -31,7 +31,7 @@ let package = Package(
                 "AvestaTerminal"
             ],
             path: "App",
-            exclude: ["Info.plist", "Assets.xcassets", "BUILD.bazel"]
+            exclude: ["Info.plist", "AvestaCode.entitlements", "Assets.xcassets", "BUILD.bazel"]
         ),
         .target(
             name: "AvestaCore",
