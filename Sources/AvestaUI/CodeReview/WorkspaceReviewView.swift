@@ -14,7 +14,7 @@ struct WorkspaceReviewView: View {
     @State private var selectedDocument: ReviewDiffDocument?
     @State private var lineSelection: ReviewLineSelection?
     @State private var showingComments = false
-    @State private var commentFocus: ReviewCommentFocus?
+    @State private var inlineCommentFocus: ReviewCommentFocus?
 
     private var state: WorkspaceReviewState { model.reviewStates[workspace.id] ?? WorkspaceReviewState(workspaceID: workspace.id) }
     private var files: [WorkspaceFileDiff] {
@@ -35,9 +35,19 @@ struct WorkspaceReviewView: View {
                 else { ContentUnavailableView("No Changes", systemImage: "checkmark.circle", description: Text("The selected baseline has no changed files.")) }
             }
         }
-        .sheet(item: $composer) { state in AnnotationComposer(model: model, workspace: workspace, state: state) }
+        .sheet(item: $composer) { state in
+            AnnotationComposer(model: model, workspace: workspace, state: state) { annotation in
+                lineSelection = nil
+                revealComment(annotation)
+            }
+        }
         .sheet(isPresented: $showingComments) {
-            ReviewCommentsSheet(model: model, workspace: workspace, initialFocus: commentFocus)
+            ReviewCommentsSheet(
+                model: model,
+                workspace: workspace,
+                canReveal: canReveal,
+                onReveal: revealComment
+            )
         }
         .onAppear {
             synchronizeRelativeBranch()
@@ -67,7 +77,6 @@ struct WorkspaceReviewView: View {
             Spacer()
             Text("\(files.count) files  +\(state.additions)  −\(state.deletions)").font(.caption).foregroundStyle(.secondary)
             Button {
-                commentFocus = nil
                 showingComments = true
             } label: {
                 Label("Comments \(state.annotations.count)", systemImage: "text.bubble")
@@ -151,9 +160,9 @@ struct WorkspaceReviewView: View {
             }.padding(8)
             Divider()
             switch state.mode {
-            case .unified: UnifiedDiff(document: document, annotations: annotations(for: file), selection: lineSelection, activeHunkID: activeHunkID, oldHighlights: oldHighlights, newHighlights: newHighlights, select: selectLine, openComments: openComments)
-            case .split: SplitDiff(document: document, annotations: annotations(for: file), selection: lineSelection, activeHunkID: activeHunkID, oldHighlights: oldHighlights, newHighlights: newHighlights, select: selectLine, openComments: openComments)
-            case .fullFile: FullFileDiff(document: document, annotations: annotations(for: file), selection: lineSelection, activeHunkID: activeHunkID, oldHighlights: oldHighlights, newHighlights: newHighlights, select: selectLine, openComments: openComments)
+            case .unified: UnifiedDiff(model: model, document: document, annotations: annotations(for: file), selection: lineSelection, inlineCommentFocus: inlineCommentFocus, activeHunkID: activeHunkID, oldHighlights: oldHighlights, newHighlights: newHighlights, select: selectLine, toggleComments: toggleInlineComments)
+            case .split: SplitDiff(model: model, document: document, annotations: annotations(for: file), selection: lineSelection, inlineCommentFocus: inlineCommentFocus, activeHunkID: activeHunkID, oldHighlights: oldHighlights, newHighlights: newHighlights, select: selectLine, toggleComments: toggleInlineComments)
+            case .fullFile: FullFileDiff(model: model, document: document, annotations: annotations(for: file), selection: lineSelection, inlineCommentFocus: inlineCommentFocus, activeHunkID: activeHunkID, oldHighlights: oldHighlights, newHighlights: newHighlights, select: selectLine, toggleComments: toggleInlineComments)
             }
         }
     }
@@ -185,9 +194,26 @@ struct WorkspaceReviewView: View {
         guard lineSelection?.fileID == file.id else { return nil }
         return lineSelection
     }
-    private func openComments(file: WorkspaceFileDiff, side: DiffSide, line: Int) {
-        commentFocus = ReviewCommentFocus(repositoryID: file.repositoryID, filePath: file.diff.path, side: side, line: line)
-        showingComments = true
+    private func toggleInlineComments(file: WorkspaceFileDiff, side: DiffSide, line: Int) {
+        let focus = ReviewCommentFocus(repositoryID: file.repositoryID, filePath: file.diff.path, side: side, line: line)
+        inlineCommentFocus = inlineCommentFocus == focus ? nil : focus
+    }
+    private func canReveal(_ annotation: ReviewAnnotation) -> Bool {
+        !annotation.isOutdated && files.contains { $0.repositoryID == annotation.repositoryID && $0.diff.path == annotation.filePath }
+    }
+    private func revealComment(_ annotation: ReviewAnnotation) {
+        guard let file = files.first(where: { $0.repositoryID == annotation.repositoryID && $0.diff.path == annotation.filePath }) else { return }
+        selectedFileID = file.id
+        inlineCommentFocus = ReviewCommentFocus(
+            repositoryID: annotation.repositoryID,
+            filePath: annotation.filePath,
+            side: annotation.side,
+            line: annotation.startLine
+        )
+        activeHunkID = ReviewDiffDocument(file: file).hunkID(
+            side: annotation.side,
+            intersecting: annotation.startLine...annotation.endLine
+        )
     }
     private func beginAnnotation(document: ReviewDiffDocument, selection: ReviewLineSelection) {
         composer = AnnotationComposerState(
@@ -241,6 +267,7 @@ struct WorkspaceReviewView: View {
         let document = ReviewDiffDocument(file: file)
         selectedDocument = document
         if lineSelection?.fileID != file.id { lineSelection = nil }
+        if inlineCommentFocus.map({ $0.repositoryID != file.repositoryID || $0.filePath != file.diff.path }) == true { inlineCommentFocus = nil }
         if !document.hunks.contains(where: { $0.id == activeHunkID }) {
             activeHunkID = document.firstHunkID
         }
@@ -268,14 +295,16 @@ struct WorkspaceReviewView: View {
 }
 
 private struct UnifiedDiff: View {
+    let model: ApplicationModel
     let document: ReviewDiffDocument
     let annotations: [ReviewAnnotation]
     let selection: ReviewLineSelection?
+    let inlineCommentFocus: ReviewCommentFocus?
     let activeHunkID: String?
     let oldHighlights: [Int: AttributedString]
     let newHighlights: [Int: AttributedString]
     let select: (WorkspaceFileDiff, DiffLine, DiffSide) -> Void
-    let openComments: (WorkspaceFileDiff, DiffSide, Int) -> Void
+    let toggleComments: (WorkspaceFileDiff, DiffSide, Int) -> Void
 
     var body: some View {
         GeometryReader { geometry in
@@ -285,15 +314,21 @@ private struct UnifiedDiff: View {
                         ForEach(document.hunks) { hunk in
                             HunkHeader(title: hunk.header, isActive: hunk.id == activeHunkID).id(hunk.id)
                             ForEach(hunk.unifiedRows) { row in
-                                DiffRow(
-                                    line: row.line,
-                                    highlightedContent: highlighted(side: row.sourceSide, lineNumber: row.sourceLineNumber, fallback: row.line.content),
-                                    annotationCount: annotationCount(side: row.sourceSide, lineNumber: row.sourceLineNumber),
-                                    isSelected: isSelected(side: row.sourceSide, lineNumber: row.sourceLineNumber),
-                                    openAnnotations: { if let line = row.sourceLineNumber { openComments(document.file, row.sourceSide, line) } }
-                                )
-                                .contentShape(Rectangle())
-                                .onTapGesture { select(document.file, row.line, row.sourceSide) }
+                                VStack(spacing: 0) {
+                                    let comments = rowAnnotations(side: row.sourceSide, lineNumber: row.sourceLineNumber)
+                                    DiffRow(
+                                        line: row.line,
+                                        highlightedContent: highlighted(side: row.sourceSide, lineNumber: row.sourceLineNumber, fallback: row.line.content),
+                                        annotationCount: comments.count,
+                                        isSelected: isSelected(side: row.sourceSide, lineNumber: row.sourceLineNumber),
+                                        openAnnotations: { if let line = row.sourceLineNumber { toggleComments(document.file, row.sourceSide, line) } }
+                                    )
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { select(document.file, row.line, row.sourceSide) }
+                                    if isExpanded(side: row.sourceSide, lineNumber: row.sourceLineNumber), !comments.isEmpty {
+                                        InlineReviewThread(model: model, annotations: comments)
+                                    }
+                                }
                             }
                         }
                     }
@@ -309,9 +344,13 @@ private struct UnifiedDiff: View {
         guard let lineNumber else { return AttributedString(fallback) }
         return (side == .old ? oldHighlights[lineNumber] : newHighlights[lineNumber]) ?? AttributedString(fallback)
     }
-    private func annotationCount(side: DiffSide, lineNumber: Int?) -> Int {
-        guard let lineNumber else { return 0 }
-        return annotations.filter { $0.side == side && $0.startLine...$0.endLine ~= lineNumber }.count
+    private func rowAnnotations(side: DiffSide, lineNumber: Int?) -> [ReviewAnnotation] {
+        guard let lineNumber else { return [] }
+        return annotations.filter { $0.side == side && $0.startLine...$0.endLine ~= lineNumber }
+    }
+    private func isExpanded(side: DiffSide, lineNumber: Int?) -> Bool {
+        guard let lineNumber else { return false }
+        return inlineCommentFocus == ReviewCommentFocus(repositoryID: document.file.repositoryID, filePath: document.file.diff.path, side: side, line: lineNumber)
     }
     private func isSelected(side: DiffSide, lineNumber: Int?) -> Bool {
         guard let lineNumber else { return false }
@@ -324,14 +363,16 @@ private struct UnifiedDiff: View {
 }
 
 private struct SplitDiff: View {
+    let model: ApplicationModel
     let document: ReviewDiffDocument
     let annotations: [ReviewAnnotation]
     let selection: ReviewLineSelection?
+    let inlineCommentFocus: ReviewCommentFocus?
     let activeHunkID: String?
     let oldHighlights: [Int: AttributedString]
     let newHighlights: [Int: AttributedString]
     let select: (WorkspaceFileDiff, DiffLine, DiffSide) -> Void
-    let openComments: (WorkspaceFileDiff, DiffSide, Int) -> Void
+    let toggleComments: (WorkspaceFileDiff, DiffSide, Int) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -349,12 +390,21 @@ private struct SplitDiff: View {
                             ForEach(document.hunks) { hunk in
                                 HunkHeader(title: hunk.header, isActive: hunk.id == activeHunkID).id(hunk.id)
                                 ForEach(hunk.splitRows) { row in
-                                    HStack(spacing: 0) {
-                                        SplitCell(cell: row.old, highlightedContent: highlight(row.old), annotationCount: annotationCount(row.old), isSelected: isSelected(row.old), select: { line, side in select(document.file, line, side) }, openAnnotations: { if let cell = row.old { openComments(document.file, cell.side, cell.lineNumber) } })
-                                        Divider()
-                                        SplitCell(cell: row.new, highlightedContent: highlight(row.new), annotationCount: annotationCount(row.new), isSelected: isSelected(row.new), select: { line, side in select(document.file, line, side) }, openAnnotations: { if let cell = row.new { openComments(document.file, cell.side, cell.lineNumber) } })
+                                    VStack(spacing: 0) {
+                                        HStack(spacing: 0) {
+                                            SplitCell(cell: row.old, highlightedContent: highlight(row.old), annotationCount: annotationCount(row.old), isSelected: isSelected(row.old), select: { line, side in select(document.file, line, side) }, openAnnotations: { if let cell = row.old { toggleComments(document.file, cell.side, cell.lineNumber) } })
+                                            Divider()
+                                            SplitCell(cell: row.new, highlightedContent: highlight(row.new), annotationCount: annotationCount(row.new), isSelected: isSelected(row.new), select: { line, side in select(document.file, line, side) }, openAnnotations: { if let cell = row.new { toggleComments(document.file, cell.side, cell.lineNumber) } })
+                                        }
+                                        .frame(height: 20)
+                                        if isExpanded(row.old) || isExpanded(row.new) {
+                                            HStack(spacing: 0) {
+                                                inlineThread(row.old)
+                                                Divider()
+                                                inlineThread(row.new)
+                                            }
+                                        }
                                     }
-                                    .frame(height: 20)
                                 }
                             }
                         }
@@ -372,24 +422,40 @@ private struct SplitDiff: View {
         return (cell.side == .old ? oldHighlights[cell.lineNumber] : newHighlights[cell.lineNumber]) ?? AttributedString(cell.content)
     }
     private func annotationCount(_ cell: DiffCell?) -> Int {
-        guard let cell else { return 0 }
-        return annotations.filter { $0.side == cell.side && $0.startLine...$0.endLine ~= cell.lineNumber }.count
+        cellAnnotations(cell).count
+    }
+    private func cellAnnotations(_ cell: DiffCell?) -> [ReviewAnnotation] {
+        guard let cell else { return [] }
+        return annotations.filter { $0.side == cell.side && $0.startLine...$0.endLine ~= cell.lineNumber }
     }
     private func isSelected(_ cell: DiffCell?) -> Bool {
         guard let cell else { return false }
         return selection?.contains(fileID: document.file.id, side: cell.side, line: cell.lineNumber) == true
     }
+    private func isExpanded(_ cell: DiffCell?) -> Bool {
+        guard let cell else { return false }
+        return inlineCommentFocus == ReviewCommentFocus(repositoryID: document.file.repositoryID, filePath: document.file.diff.path, side: cell.side, line: cell.lineNumber)
+    }
+    @ViewBuilder private func inlineThread(_ cell: DiffCell?) -> some View {
+        if isExpanded(cell) {
+            InlineReviewThread(model: model, annotations: cellAnnotations(cell)).frame(maxWidth: .infinity, alignment: .topLeading)
+        } else {
+            Color.clear.frame(maxWidth: .infinity, minHeight: 1)
+        }
+    }
 }
 
 private struct FullFileDiff: View {
+    let model: ApplicationModel
     let document: ReviewDiffDocument
     let annotations: [ReviewAnnotation]
     let selection: ReviewLineSelection?
+    let inlineCommentFocus: ReviewCommentFocus?
     let activeHunkID: String?
     let oldHighlights: [Int: AttributedString]
     let newHighlights: [Int: AttributedString]
     let select: (WorkspaceFileDiff, DiffLine, DiffSide) -> Void
-    let openComments: (WorkspaceFileDiff, DiffSide, Int) -> Void
+    let toggleComments: (WorkspaceFileDiff, DiffSide, Int) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -404,23 +470,33 @@ private struct FullFileDiff: View {
                             ForEach(document.fullFileRows) { row in
                                 switch row {
                                 case .source(let source):
-                                    FullFileSourceView(
-                                        row: source,
-                                        highlightedContent: highlight(source),
-                                        annotationCount: annotations.filter { $0.side == source.side && $0.startLine...$0.endLine ~= source.lineNumber }.count,
-                                        isSelected: selection?.contains(fileID: document.file.id, side: source.side, line: source.lineNumber) == true,
-                                        select: { select(document.file, source.diffLine, source.side) },
-                                        openAnnotations: { openComments(document.file, source.side, source.lineNumber) }
-                                    ).id(source.id)
+                                    VStack(spacing: 0) {
+                                        let comments = rowAnnotations(side: source.side, line: source.lineNumber)
+                                        FullFileSourceView(
+                                            row: source,
+                                            highlightedContent: highlight(source),
+                                            annotationCount: comments.count,
+                                            isSelected: selection?.contains(fileID: document.file.id, side: source.side, line: source.lineNumber) == true,
+                                            select: { select(document.file, source.diffLine, source.side) },
+                                            openAnnotations: { toggleComments(document.file, source.side, source.lineNumber) }
+                                        )
+                                        if isExpanded(side: source.side, line: source.lineNumber), !comments.isEmpty {
+                                            InlineReviewThread(model: model, annotations: comments)
+                                        }
+                                    }.id(source.id)
                                 case .deletion(let marker):
                                     FullFileDeletionView(
+                                        model: model,
                                         marker: marker,
                                         oldHighlights: oldHighlights,
                                         annotations: annotations,
                                         selection: selection,
+                                        inlineCommentFocus: inlineCommentFocus,
                                         fileID: document.file.id,
+                                        repositoryID: document.file.repositoryID,
+                                        filePath: document.file.diff.path,
                                         select: { select(document.file, $0, .old) },
-                                        openComments: { openComments(document.file, .old, $0) }
+                                        toggleComments: { toggleComments(document.file, .old, $0) }
                                     ).id(marker.id)
                                 }
                             }
@@ -436,6 +512,12 @@ private struct FullFileDiff: View {
 
     private func highlight(_ row: FullFileSourceRow) -> AttributedString {
         (row.side == .old ? oldHighlights[row.lineNumber] : newHighlights[row.lineNumber]) ?? AttributedString(row.content)
+    }
+    private func rowAnnotations(side: DiffSide, line: Int) -> [ReviewAnnotation] {
+        annotations.filter { $0.side == side && $0.startLine...$0.endLine ~= line }
+    }
+    private func isExpanded(side: DiffSide, line: Int) -> Bool {
+        inlineCommentFocus == ReviewCommentFocus(repositoryID: document.file.repositoryID, filePath: document.file.diff.path, side: side, line: line)
     }
     private func scroll(to hunkID: String?, proxy: ScrollViewProxy) {
         guard let hunkID, let target = document.fullFileTargetID(forHunkID: hunkID) else { return }
@@ -561,13 +643,17 @@ private struct FullFileSourceView: View {
 }
 
 private struct FullFileDeletionView: View {
+    let model: ApplicationModel
     let marker: FullFileDeletionMarker
     let oldHighlights: [Int: AttributedString]
     let annotations: [ReviewAnnotation]
     let selection: ReviewLineSelection?
+    let inlineCommentFocus: ReviewCommentFocus?
     let fileID: String
+    let repositoryID: UUID
+    let filePath: String
     let select: (DiffLine) -> Void
-    let openComments: (Int) -> Void
+    let toggleComments: (Int) -> Void
     @State private var expanded = false
     var body: some View {
         VStack(spacing: 0) {
@@ -596,6 +682,7 @@ private struct FullFileDeletionView: View {
             if expanded {
                 ForEach(Array(marker.removedLines.enumerated()), id: \.offset) { index, content in
                     let lineNumber = marker.oldStartLine + index
+                    let comments = annotations.filter { $0.side == .old && $0.startLine...$0.endLine ~= lineNumber }
                     let row = FullFileSourceRow(
                         id: "\(marker.id):old:\(lineNumber)",
                         side: .old,
@@ -603,22 +690,38 @@ private struct FullFileDeletionView: View {
                         kind: .removed,
                         content: content
                     )
-                    FullFileSourceView(
-                        row: row,
-                        highlightedContent: oldHighlights[lineNumber] ?? AttributedString(content),
-                        annotationCount: annotations.filter { $0.side == .old && $0.startLine...$0.endLine ~= lineNumber }.count,
-                        isSelected: selection?.contains(fileID: fileID, side: .old, line: lineNumber) == true,
-                        select: { select(row.diffLine) },
-                        openAnnotations: { openComments(lineNumber) }
-                    )
+                    VStack(spacing: 0) {
+                        FullFileSourceView(
+                            row: row,
+                            highlightedContent: oldHighlights[lineNumber] ?? AttributedString(content),
+                            annotationCount: comments.count,
+                            isSelected: selection?.contains(fileID: fileID, side: .old, line: lineNumber) == true,
+                            select: { select(row.diffLine) },
+                            openAnnotations: { toggleComments(lineNumber) }
+                        )
+                        if inlineCommentFocus == ReviewCommentFocus(repositoryID: repositoryID, filePath: filePath, side: .old, line: lineNumber), !comments.isEmpty {
+                            InlineReviewThread(model: model, annotations: comments)
+                        }
+                    }
                 }
             }
         }
+        .onAppear { revealFocusedDeletionIfNeeded() }
+        .onChange(of: inlineCommentFocus) { _, _ in revealFocusedDeletionIfNeeded() }
     }
 
     private var oldLineSummary: String {
         let end = marker.oldStartLine + marker.removedLineCount - 1
         return end == marker.oldStartLine ? "old line \(end)" : "old lines \(marker.oldStartLine)–\(end)"
+    }
+
+    private func revealFocusedDeletionIfNeeded() {
+        guard let inlineCommentFocus,
+              inlineCommentFocus.repositoryID == repositoryID,
+              inlineCommentFocus.filePath == filePath,
+              inlineCommentFocus.side == .old,
+              marker.oldStartLine..<(marker.oldStartLine + marker.removedLineCount) ~= inlineCommentFocus.line else { return }
+        expanded = true
     }
 }
 
@@ -638,6 +741,7 @@ private struct AnnotationComposer: View {
     let model: ApplicationModel
     let workspace: WorkspaceRecord
     let state: AnnotationComposerState
+    let onSaved: (ReviewAnnotation) -> Void
     @State private var destination: Destination = .comment
     @State private var text = ""
 
@@ -675,6 +779,7 @@ private struct AnnotationComposer: View {
             case .copilot: await model.askAssistant(annotation: annotation, provider: .copilot)
             case .terminal: await model.sendAnnotationToTerminal(annotation)
             }
+            onSaved(annotation)
             dismiss()
         }
     }
