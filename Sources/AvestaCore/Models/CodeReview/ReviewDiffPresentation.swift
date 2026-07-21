@@ -5,6 +5,9 @@ import Foundation
 /// change kinds by comparing the two source strings independently.
 public struct ReviewDiffDocument: Hashable, Sendable {
     public let file: WorkspaceFileDiff
+    /// Nil means every representation was requested. Production views pass
+    /// their active mode so large files do not eagerly build invisible rows.
+    public let presentationMode: ReviewDisplayMode?
     public let hunks: [ReviewDiffHunk]
     public let oldLines: [String]
     public let newLines: [String]
@@ -13,21 +16,32 @@ public struct ReviewDiffDocument: Hashable, Sendable {
     public let fullFileRows: [FullFileDiffRow]
     public let displayedFullFileSide: DiffSide
 
-    public init(file: WorkspaceFileDiff) {
+    public init(file: WorkspaceFileDiff, mode: ReviewDisplayMode? = nil) {
         self.file = file
+        presentationMode = mode
         oldLines = Self.sourceLines(file.oldContent)
         newLines = Self.sourceLines(file.newContent)
-        hunks = file.diff.hunks.enumerated().map { ReviewDiffHunk(hunk: $0.element, ordinal: $0.offset) }
+        hunks = file.diff.hunks.enumerated().map {
+            ReviewDiffHunk(
+                hunk: $0.element,
+                ordinal: $0.offset,
+                buildSplitRows: mode == nil || mode == .split
+            )
+        }
         changedOldLines = Set(file.diff.hunks.flatMap(\.lines).compactMap { $0.kind == .removed ? $0.oldLineNumber : nil })
         changedNewLines = Set(file.diff.hunks.flatMap(\.lines).compactMap { $0.kind == .added ? $0.newLineNumber : nil })
         displayedFullFileSide = file.diff.status == .deleted ? .old : .new
-        fullFileRows = Self.buildFullFileRows(
-            file: file,
-            oldLines: oldLines,
-            newLines: newLines,
-            changedOldLines: changedOldLines,
-            changedNewLines: changedNewLines
-        )
+        if mode == nil || mode == .fullFile {
+            fullFileRows = Self.buildFullFileRows(
+                file: file,
+                oldLines: oldLines,
+                newLines: newLines,
+                changedOldLines: changedOldLines,
+                changedNewLines: changedNewLines
+            )
+        } else {
+            fullFileRows = []
+        }
     }
 
     public var firstHunkID: String? { hunks.first?.id }
@@ -213,7 +227,7 @@ public struct ReviewDiffHunk: Identifiable, Hashable, Sendable {
     public let unifiedRows: [UnifiedDiffRow]
     public let splitRows: [SplitDiffRow]
 
-    init(hunk: DiffHunk, ordinal: Int) {
+    init(hunk: DiffHunk, ordinal: Int, buildSplitRows: Bool = true) {
         self.ordinal = ordinal
         oldStart = hunk.oldStart
         oldCount = hunk.oldCount
@@ -228,7 +242,7 @@ public struct ReviewDiffHunk: Identifiable, Hashable, Sendable {
                 sourceLineNumber: line.kind == .removed ? line.oldLineNumber : line.newLineNumber
             )
         }
-        splitRows = Self.buildSplitRows(hunk.lines, hunkOrdinal: ordinal)
+        splitRows = buildSplitRows ? Self.buildSplitRows(hunk.lines, hunkOrdinal: ordinal) : []
     }
 
     public var header: String { "@@ -\(oldStart),\(oldCount) +\(newStart),\(newCount) @@" }
@@ -279,6 +293,38 @@ public struct ReviewDiffHunk: Identifiable, Hashable, Sendable {
             group += 1
         }
         return result
+    }
+}
+
+/// Precomputes inline-annotation membership once per selected file. Review
+/// rows can then look up their comments in O(1), instead of scanning every
+/// annotation during each SwiftUI body update and scroll pass.
+public struct ReviewAnnotationIndex: Sendable {
+    private struct Key: Hashable, Sendable {
+        let side: DiffSide
+        let line: Int
+    }
+
+    private let annotationsByLine: [Key: [ReviewAnnotation]]
+
+    public init(annotations: [ReviewAnnotation]) {
+        var values: [Key: [ReviewAnnotation]] = [:]
+        for annotation in annotations {
+            let lower = max(1, min(annotation.startLine, annotation.endLine))
+            let upper = max(1, max(annotation.startLine, annotation.endLine))
+            for line in lower...upper {
+                values[Key(side: annotation.side, line: line), default: []].append(annotation)
+            }
+        }
+        annotationsByLine = values
+    }
+
+    public func annotations(side: DiffSide, line: Int) -> [ReviewAnnotation] {
+        annotationsByLine[Key(side: side, line: line)] ?? []
+    }
+
+    public func count(side: DiffSide, line: Int) -> Int {
+        annotationsByLine[Key(side: side, line: line)]?.count ?? 0
     }
 }
 

@@ -37,8 +37,11 @@ enum ReviewSyntaxLanguage: String, CaseIterable, Sendable {
 /// use a conservative lexical highlighter until pinned grammar products are
 /// available in both SwiftPM and Bazel; unknown inputs stay plain text.
 enum SyntaxHighlighter {
-    static let automaticByteLimit = 2 * 1_024 * 1_024
-    static let automaticLineLimit = 50_000
+    // Whole-file highlighting creates an attributed value for every visible
+    // line. Above these bounds the plain monospaced representation is much
+    // smoother to scroll and avoids a large main-thread dictionary swap.
+    static let automaticByteLimit = 512 * 1_024
+    static let automaticLineLimit = 10_000
 
     static func highlightedLines(for source: String, path: String) -> [SyntaxHighlightedLine] {
         let language = ReviewSyntaxLanguage.resolve(path: path)
@@ -61,6 +64,18 @@ enum SyntaxHighlighter {
         }
         cache.insert(highlighted, for: key)
         return highlighted
+    }
+
+    /// The Review viewport uses nil to keep its normal plain-text row fallback
+    /// instead of materializing tens of thousands of plain AttributedStrings.
+    /// The work is intended to run off the main actor.
+    static func automaticHighlightedLines(for source: String, path: String) -> [SyntaxHighlightedLine]? {
+        guard source.utf8.count <= automaticByteLimit,
+              source.reduce(into: 1, { if $1 == "\n" { $0 += 1 } }) <= automaticLineLimit,
+              ReviewSyntaxLanguage.resolve(path: path) != nil else {
+            return nil
+        }
+        return highlightedLines(for: source, path: path)
     }
 
     static func plainLines(for source: String) -> [SyntaxHighlightedLine] { sourceLines(for: source) }

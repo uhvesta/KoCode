@@ -55,6 +55,7 @@ struct WorkspaceReviewView: View {
         }
         .onChange(of: state.baseline.storageValue) { _, _ in synchronizeRelativeBranch() }
         .onChange(of: selectedFile?.diff.id) { _, _ in synchronizeSelectedDocument() }
+        .onChange(of: state.mode) { _, _ in synchronizeSelectedDocument() }
         .task(id: highlightTaskIdentity) { await loadHighlighting() }
         .onExitCommand { lineSelection = nil }
     }
@@ -99,16 +100,20 @@ struct WorkspaceReviewView: View {
     }
 
     private var fileNavigator: some View {
-        List(selection: $selectedFileID) {
-            ForEach(Dictionary(grouping: files, by: \WorkspaceFileDiff.repositoryName).keys.sorted(), id: \.self) { repositoryName in
+        let groupedFiles = Dictionary(grouping: files, by: \WorkspaceFileDiff.repositoryName)
+        let annotationCounts = state.annotations.reduce(into: [ReviewFileAnnotationKey: Int]()) { counts, annotation in
+            counts[ReviewFileAnnotationKey(repositoryID: annotation.repositoryID, path: annotation.filePath), default: 0] += 1
+        }
+        return List(selection: $selectedFileID) {
+            ForEach(groupedFiles.keys.sorted(), id: \.self) { repositoryName in
                 Section(repositoryName) {
-                    ForEach(files.filter { $0.repositoryName == repositoryName }) { file in
+                    ForEach(groupedFiles[repositoryName] ?? []) { file in
                         HStack(spacing: 7) {
                             Image(systemName: statusIcon(file.diff.status)).foregroundStyle(statusColor(file.diff.status))
                             Text(file.diff.path).lineLimit(1).truncationMode(.middle)
                             Spacer()
                             Text("+\(file.diff.addedLineCount) −\(file.diff.removedLineCount)").font(.caption2).foregroundStyle(.secondary)
-                            let count = state.annotations.filter { $0.repositoryID == file.repositoryID && $0.filePath == file.diff.path }.count
+                            let count = annotationCounts[ReviewFileAnnotationKey(repositoryID: file.repositoryID, path: file.diff.path)] ?? 0
                             if count > 0 { Text("\(count)").font(.caption2).padding(4).background(.quaternary).clipShape(Circle()) }
                         }.tag(file.id)
                     }
@@ -130,6 +135,8 @@ struct WorkspaceReviewView: View {
 
     @ViewBuilder private func diffContent(_ document: ReviewDiffDocument) -> some View {
         let file = document.file
+        let fileAnnotations = annotations(for: file)
+        let annotationIndex = ReviewAnnotationIndex(annotations: fileAnnotations)
         VStack(spacing: 0) {
             HStack {
                 Text(file.repositoryName).foregroundStyle(.secondary)
@@ -160,9 +167,9 @@ struct WorkspaceReviewView: View {
             }.padding(8)
             Divider()
             switch state.mode {
-            case .unified: UnifiedDiff(model: model, document: document, annotations: annotations(for: file), selection: lineSelection, inlineCommentFocus: inlineCommentFocus, activeHunkID: activeHunkID, oldHighlights: oldHighlights, newHighlights: newHighlights, select: selectLine, toggleComments: toggleInlineComments)
-            case .split: SplitDiff(model: model, document: document, annotations: annotations(for: file), selection: lineSelection, inlineCommentFocus: inlineCommentFocus, activeHunkID: activeHunkID, oldHighlights: oldHighlights, newHighlights: newHighlights, select: selectLine, toggleComments: toggleInlineComments)
-            case .fullFile: FullFileDiff(model: model, document: document, annotations: annotations(for: file), selection: lineSelection, inlineCommentFocus: inlineCommentFocus, activeHunkID: activeHunkID, oldHighlights: oldHighlights, newHighlights: newHighlights, select: selectLine, toggleComments: toggleInlineComments)
+            case .unified: UnifiedDiff(model: model, document: document, annotationIndex: annotationIndex, selection: lineSelection, inlineCommentFocus: inlineCommentFocus, activeHunkID: activeHunkID, oldHighlights: oldHighlights, newHighlights: newHighlights, select: selectLine, toggleComments: toggleInlineComments)
+            case .split: SplitDiff(model: model, document: document, annotationIndex: annotationIndex, selection: lineSelection, inlineCommentFocus: inlineCommentFocus, activeHunkID: activeHunkID, oldHighlights: oldHighlights, newHighlights: newHighlights, select: selectLine, toggleComments: toggleInlineComments)
+            case .fullFile: FullFileDiff(model: model, document: document, annotationIndex: annotationIndex, selection: lineSelection, inlineCommentFocus: inlineCommentFocus, activeHunkID: activeHunkID, oldHighlights: oldHighlights, newHighlights: newHighlights, select: selectLine, toggleComments: toggleInlineComments)
             }
         }
     }
@@ -255,8 +262,12 @@ struct WorkspaceReviewView: View {
         return "\(file.id):\(file.oldContent.hashValue):\(file.newContent.hashValue)"
     }
     private func currentDocument(for file: WorkspaceFileDiff) -> ReviewDiffDocument {
-        if let selectedDocument, selectedDocument.file.diff.id == file.diff.id { return selectedDocument }
-        return ReviewDiffDocument(file: file)
+        if let selectedDocument,
+           selectedDocument.file.diff.id == file.diff.id,
+           selectedDocument.presentationMode == state.mode {
+            return selectedDocument
+        }
+        return ReviewDiffDocument(file: file, mode: state.mode)
     }
     private func synchronizeSelectedDocument() {
         guard let file = selectedFile else {
@@ -264,7 +275,7 @@ struct WorkspaceReviewView: View {
             activeHunkID = nil
             return
         }
-        let document = ReviewDiffDocument(file: file)
+        let document = ReviewDiffDocument(file: file, mode: state.mode)
         selectedDocument = document
         if lineSelection?.fileID != file.id { lineSelection = nil }
         if inlineCommentFocus.map({ $0.repositoryID != file.repositoryID || $0.filePath != file.diff.path }) == true { inlineCommentFocus = nil }
@@ -274,21 +285,24 @@ struct WorkspaceReviewView: View {
     }
     private func loadHighlighting() async {
         guard let file = selectedFile else { oldHighlights = [:]; newHighlights = [:]; return }
-        oldHighlights = Dictionary(uniqueKeysWithValues: SyntaxHighlighter.plainLines(for: file.oldContent).map { ($0.lineNumber, $0.content) })
-        newHighlights = Dictionary(uniqueKeysWithValues: SyntaxHighlighter.plainLines(for: file.newContent).map { ($0.lineNumber, $0.content) })
+        // Rows already render their source as a plain fallback. Starting with
+        // empty maps avoids eagerly allocating an AttributedString for every
+        // line on the main actor while background highlighting is in flight.
+        oldHighlights = [:]
+        newHighlights = [:]
         let path = file.diff.path
         let oldPath = file.diff.oldPath ?? path
         let oldSource = file.oldContent
         let newSource = file.newContent
         let result = await Task.detached(priority: .userInitiated) {
             (
-                SyntaxHighlighter.highlightedLines(for: oldSource, path: oldPath),
-                SyntaxHighlighter.highlightedLines(for: newSource, path: path)
+                SyntaxHighlighter.automaticHighlightedLines(for: oldSource, path: oldPath),
+                SyntaxHighlighter.automaticHighlightedLines(for: newSource, path: path)
             )
         }.value
         guard !Task.isCancelled else { return }
-        oldHighlights = Dictionary(uniqueKeysWithValues: result.0.map { ($0.lineNumber, $0.content) })
-        newHighlights = Dictionary(uniqueKeysWithValues: result.1.map { ($0.lineNumber, $0.content) })
+        oldHighlights = Dictionary(uniqueKeysWithValues: (result.0 ?? []).map { ($0.lineNumber, $0.content) })
+        newHighlights = Dictionary(uniqueKeysWithValues: (result.1 ?? []).map { ($0.lineNumber, $0.content) })
     }
     private func statusIcon(_ status: FileStatus) -> String { switch status { case .added: return "plus.circle"; case .deleted: return "minus.circle"; case .renamed: return "arrow.right.circle"; case .modified: return "pencil.circle" } }
     private func statusColor(_ status: FileStatus) -> Color { switch status { case .added: return .green; case .deleted: return .red; case .renamed: return .blue; case .modified: return .orange } }
@@ -297,7 +311,7 @@ struct WorkspaceReviewView: View {
 private struct UnifiedDiff: View {
     let model: ApplicationModel
     let document: ReviewDiffDocument
-    let annotations: [ReviewAnnotation]
+    let annotationIndex: ReviewAnnotationIndex
     let selection: ReviewLineSelection?
     let inlineCommentFocus: ReviewCommentFocus?
     let activeHunkID: String?
@@ -346,7 +360,7 @@ private struct UnifiedDiff: View {
     }
     private func rowAnnotations(side: DiffSide, lineNumber: Int?) -> [ReviewAnnotation] {
         guard let lineNumber else { return [] }
-        return annotations.filter { $0.side == side && $0.startLine...$0.endLine ~= lineNumber }
+        return annotationIndex.annotations(side: side, line: lineNumber)
     }
     private func isExpanded(side: DiffSide, lineNumber: Int?) -> Bool {
         guard let lineNumber else { return false }
@@ -365,7 +379,7 @@ private struct UnifiedDiff: View {
 private struct SplitDiff: View {
     let model: ApplicationModel
     let document: ReviewDiffDocument
-    let annotations: [ReviewAnnotation]
+    let annotationIndex: ReviewAnnotationIndex
     let selection: ReviewLineSelection?
     let inlineCommentFocus: ReviewCommentFocus?
     let activeHunkID: String?
@@ -426,7 +440,7 @@ private struct SplitDiff: View {
     }
     private func cellAnnotations(_ cell: DiffCell?) -> [ReviewAnnotation] {
         guard let cell else { return [] }
-        return annotations.filter { $0.side == cell.side && $0.startLine...$0.endLine ~= cell.lineNumber }
+        return annotationIndex.annotations(side: cell.side, line: cell.lineNumber)
     }
     private func isSelected(_ cell: DiffCell?) -> Bool {
         guard let cell else { return false }
@@ -448,7 +462,7 @@ private struct SplitDiff: View {
 private struct FullFileDiff: View {
     let model: ApplicationModel
     let document: ReviewDiffDocument
-    let annotations: [ReviewAnnotation]
+    let annotationIndex: ReviewAnnotationIndex
     let selection: ReviewLineSelection?
     let inlineCommentFocus: ReviewCommentFocus?
     let activeHunkID: String?
@@ -489,7 +503,7 @@ private struct FullFileDiff: View {
                                         model: model,
                                         marker: marker,
                                         oldHighlights: oldHighlights,
-                                        annotations: annotations,
+                                        annotationIndex: annotationIndex,
                                         selection: selection,
                                         inlineCommentFocus: inlineCommentFocus,
                                         fileID: document.file.id,
@@ -514,7 +528,7 @@ private struct FullFileDiff: View {
         (row.side == .old ? oldHighlights[row.lineNumber] : newHighlights[row.lineNumber]) ?? AttributedString(row.content)
     }
     private func rowAnnotations(side: DiffSide, line: Int) -> [ReviewAnnotation] {
-        annotations.filter { $0.side == side && $0.startLine...$0.endLine ~= line }
+        annotationIndex.annotations(side: side, line: line)
     }
     private func isExpanded(side: DiffSide, line: Int) -> Bool {
         inlineCommentFocus == ReviewCommentFocus(repositoryID: document.file.repositoryID, filePath: document.file.diff.path, side: side, line: line)
@@ -646,7 +660,7 @@ private struct FullFileDeletionView: View {
     let model: ApplicationModel
     let marker: FullFileDeletionMarker
     let oldHighlights: [Int: AttributedString]
-    let annotations: [ReviewAnnotation]
+    let annotationIndex: ReviewAnnotationIndex
     let selection: ReviewLineSelection?
     let inlineCommentFocus: ReviewCommentFocus?
     let fileID: String
@@ -682,7 +696,7 @@ private struct FullFileDeletionView: View {
             if expanded {
                 ForEach(Array(marker.removedLines.enumerated()), id: \.offset) { index, content in
                     let lineNumber = marker.oldStartLine + index
-                    let comments = annotations.filter { $0.side == .old && $0.startLine...$0.endLine ~= lineNumber }
+                    let comments = annotationIndex.annotations(side: .old, line: lineNumber)
                     let row = FullFileSourceRow(
                         id: "\(marker.id):old:\(lineNumber)",
                         side: .old,
@@ -723,6 +737,11 @@ private struct FullFileDeletionView: View {
               marker.oldStartLine..<(marker.oldStartLine + marker.removedLineCount) ~= inlineCommentFocus.line else { return }
         expanded = true
     }
+}
+
+private struct ReviewFileAnnotationKey: Hashable {
+    let repositoryID: UUID
+    let path: String
 }
 
 private struct AnnotationComposerState: Identifiable {
