@@ -6,6 +6,33 @@ import XCTest
 @testable import AvestaTerminal
 
 final class TerminalInputMappingTests: XCTestCase {
+    func testMouseCoordinatesUseLogicalPointsWithTopLeftOrigin() {
+        XCTAssertEqual(
+            TerminalInputMapping.ghosttyMousePosition(
+                viewPoint: CGPoint(x: 25, y: 60),
+                boundsHeight: 200
+            ),
+            CGPoint(x: 25, y: 140)
+        )
+    }
+
+    func testMouseCoordinatesPreserveOutOfBoundsDragPositions() {
+        XCTAssertEqual(
+            TerminalInputMapping.ghosttyMousePosition(
+                viewPoint: CGPoint(x: -8, y: -10),
+                boundsHeight: 200
+            ),
+            CGPoint(x: -8, y: 210)
+        )
+        XCTAssertEqual(
+            TerminalInputMapping.ghosttyMousePosition(
+                viewPoint: CGPoint(x: 80, y: 220),
+                boundsHeight: 200
+            ),
+            CGPoint(x: 80, y: -20)
+        )
+    }
+
     func testNonCharacterKeysUseGhosttyKeyTextWhenAvailable() {
         XCTAssertNil(
             TerminalInputMapping.text(modifiers: [], characters: "\r", charactersIgnoringModifiers: "\r"),

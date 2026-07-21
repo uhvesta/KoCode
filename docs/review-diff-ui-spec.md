@@ -215,7 +215,7 @@ Tree-sitter grammars and queries must be pinned and packaged for both SwiftPM/Xc
 
 ### Large-file policy
 
-- Files up to 2 MB or 50,000 lines highlight automatically in the background.
+- Files up to 512 KB or 10,000 lines highlight automatically in the background.
 - Larger files render plain text immediately and offer “Enable syntax highlighting,” with cancellation and progress.
 - Highlight cache entries are bounded by total attributed-text cost and evicted least-recently-used.
 

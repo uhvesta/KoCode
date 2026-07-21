@@ -82,4 +82,11 @@ final class AvestaUITests: XCTestCase {
         XCTAssertEqual(lines.map(\.lineNumber), [1, 2, 3])
         XCTAssertEqual(lines.map { String($0.content.characters) }, ["[[package]]", "name = \"demo\"", "version = \"1.0\""])
     }
+
+    func testAutomaticHighlightingSkipsOversizedAndUnknownSources() {
+        let oversized = String(repeating: "let value = 1\n", count: SyntaxHighlighter.automaticLineLimit + 1)
+        XCTAssertNil(SyntaxHighlighter.automaticHighlightedLines(for: oversized, path: "large.swift"))
+        XCTAssertNil(SyntaxHighlighter.automaticHighlightedLines(for: "plain", path: "file.unknown"))
+        XCTAssertNotNil(SyntaxHighlighter.automaticHighlightedLines(for: "let value = 1", path: "small.swift"))
+    }
 }

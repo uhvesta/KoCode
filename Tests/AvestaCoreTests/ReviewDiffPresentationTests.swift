@@ -220,6 +220,40 @@ final class ReviewDiffPresentationTests: XCTestCase {
         XCTAssertEqual(first.hunks.flatMap(\.splitRows).map(\.id), second.hunks.flatMap(\.splitRows).map(\.id))
     }
 
+    func testModeSpecificDocumentsOnlyBuildVisibleRepresentations() {
+        let file = fixture(
+            old: "old",
+            new: "new",
+            lines: [line(.removed, 1, nil, "old"), line(.added, nil, 1, "new")]
+        )
+
+        let unified = ReviewDiffDocument(file: file, mode: .unified)
+        XCTAssertEqual(unified.presentationMode, .unified)
+        XCTAssertFalse(unified.hunks[0].unifiedRows.isEmpty)
+        XCTAssertTrue(unified.hunks[0].splitRows.isEmpty)
+        XCTAssertTrue(unified.fullFileRows.isEmpty)
+
+        let split = ReviewDiffDocument(file: file, mode: .split)
+        XCTAssertFalse(split.hunks[0].splitRows.isEmpty)
+        XCTAssertTrue(split.fullFileRows.isEmpty)
+
+        let fullFile = ReviewDiffDocument(file: file, mode: .fullFile)
+        XCTAssertTrue(fullFile.hunks[0].splitRows.isEmpty)
+        XCTAssertFalse(fullFile.fullFileRows.isEmpty)
+    }
+
+    func testAnnotationIndexLooksUpRangesBySideAndLine() {
+        let old = annotation(side: .old, startLine: 3, endLine: 5, text: "old range")
+        let new = annotation(side: .new, startLine: 5, endLine: 5, text: "new line")
+        let index = ReviewAnnotationIndex(annotations: [old, new])
+
+        XCTAssertEqual(index.annotations(side: .old, line: 3), [old])
+        XCTAssertEqual(index.annotations(side: .old, line: 5), [old])
+        XCTAssertEqual(index.annotations(side: .new, line: 5), [new])
+        XCTAssertEqual(index.count(side: .old, line: 4), 1)
+        XCTAssertEqual(index.count(side: .new, line: 4), 0)
+    }
+
     func testLargePresentationBuildIsLinearEnoughForInteractiveUse() {
         let lines = (1...50_000).map { (index: Int) -> DiffLine in
             line(.context, index, index, "let value\(index) = \(index)")
@@ -250,5 +284,24 @@ final class ReviewDiffPresentationTests: XCTestCase {
 
     private func line(_ kind: DiffLineKind, _ old: Int?, _ new: Int?, _ content: String) -> DiffLine {
         DiffLine(kind: kind, oldLineNumber: old, newLineNumber: new, content: content)
+    }
+
+    private func annotation(side: DiffSide, startLine: Int, endLine: Int, text: String) -> ReviewAnnotation {
+        ReviewAnnotation(
+            workspaceID: UUID(),
+            activitySessionID: UUID(),
+            reviewSessionID: UUID(),
+            repositoryID: UUID(),
+            snapshotID: UUID(),
+            kind: .comment,
+            filePath: "file.rs",
+            side: side,
+            startLine: startLine,
+            endLine: endLine,
+            anchorFingerprint: "fingerprint",
+            selectedCode: "code",
+            context: "context",
+            userText: text
+        )
     }
 }

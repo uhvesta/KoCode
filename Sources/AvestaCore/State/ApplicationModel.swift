@@ -513,11 +513,47 @@ public final class ApplicationModel {
     }
 
     private func capture(_ workspace: WorkspaceRecord, relativeTo reference: String? = nil) async -> (repositories: [ReviewSnapshotRepository], errors: [UUID: String]) {
+        // Keep the injected service path for the common single-repository case
+        // and for deterministic tests. Independent workspace repositories can
+        // safely run their read-only Git captures in parallel; a separate actor
+        // prevents synchronous Git work in one repository from serializing all
+        // the others behind the shared service actor.
+        if workspace.repositories.count <= 1 {
+            var result: [ReviewSnapshotRepository] = []
+            var errors: [UUID: String] = [:]
+            for repositoryItem in workspace.repositories {
+                do { result.append(try await git.capture(repository: repositoryItem, relativeTo: reference)) }
+                catch { errors[repositoryItem.id] = error.localizedDescription }
+            }
+            return (result, errors)
+        }
+
+        let cacheRoot = config.cacheRoot
+        let captures = await withTaskGroup(
+            of: (index: Int, repositoryID: UUID, snapshot: ReviewSnapshotRepository?, error: String?).self,
+            returning: [(index: Int, repositoryID: UUID, snapshot: ReviewSnapshotRepository?, error: String?)].self
+        ) { group in
+            for (index, repositoryItem) in workspace.repositories.enumerated() {
+                group.addTask {
+                    let service = GitService(cacheRoot: cacheRoot)
+                    do {
+                        return (index, repositoryItem.id, try await service.capture(repository: repositoryItem, relativeTo: reference), nil)
+                    } catch {
+                        return (index, repositoryItem.id, nil, error.localizedDescription)
+                    }
+                }
+            }
+
+            var values: [(index: Int, repositoryID: UUID, snapshot: ReviewSnapshotRepository?, error: String?)] = []
+            for await value in group { values.append(value) }
+            return values.sorted { $0.index < $1.index }
+        }
+
         var result: [ReviewSnapshotRepository] = []
         var errors: [UUID: String] = [:]
-        for repositoryItem in workspace.repositories {
-            do { result.append(try await git.capture(repository: repositoryItem, relativeTo: reference)) }
-            catch { errors[repositoryItem.id] = error.localizedDescription }
+        for capture in captures {
+            if let snapshot = capture.snapshot { result.append(snapshot) }
+            if let error = capture.error { errors[capture.repositoryID] = error }
         }
         return (result, errors)
     }

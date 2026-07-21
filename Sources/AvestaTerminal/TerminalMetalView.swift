@@ -6,6 +6,14 @@ import GhosttyKit
 import QuartzCore
 
 enum TerminalInputMapping {
+    /// AppKit reports view-local points from the bottom-left. libghostty's
+    /// macOS surface API expects logical (not backing-pixel) coordinates from
+    /// the top-left. Keeping this conversion independent of the display scale
+    /// prevents selections from jumping when a window moves between screens.
+    static func ghosttyMousePosition(viewPoint: CGPoint, boundsHeight: CGFloat) -> CGPoint {
+        CGPoint(x: viewPoint.x, y: boundsHeight - viewPoint.y)
+    }
+
     /// Returns the text associated with a key event. This is deliberately the
     /// text field of `ghostty_input_key_s`, never a direct PTY write. Ghostty
     /// needs the physical key and modifier bits as well as this value to apply
@@ -407,12 +415,16 @@ public final class TerminalMetalView: NSView, NSTextInputClient {
         _ = ghostty_surface_key(surface, key)
     }
 
-    public override func mouseDown(with event: NSEvent) { sendMouse(event, state: GHOSTTY_MOUSE_PRESS, button: GHOSTTY_MOUSE_LEFT) }
-    public override func mouseUp(with event: NSEvent) { sendMouse(event, state: GHOSTTY_MOUSE_RELEASE, button: GHOSTTY_MOUSE_LEFT) }
-    public override func rightMouseDown(with event: NSEvent) { sendMouse(event, state: GHOSTTY_MOUSE_PRESS, button: GHOSTTY_MOUSE_RIGHT) }
-    public override func rightMouseUp(with event: NSEvent) { sendMouse(event, state: GHOSTTY_MOUSE_RELEASE, button: GHOSTTY_MOUSE_RIGHT) }
-    public override func otherMouseDown(with event: NSEvent) { sendMouse(event, state: GHOSTTY_MOUSE_PRESS, button: mouseButton(event.buttonNumber)) }
-    public override func otherMouseUp(with event: NSEvent) { sendMouse(event, state: GHOSTTY_MOUSE_RELEASE, button: mouseButton(event.buttonNumber)) }
+    public override func mouseDown(with event: NSEvent) {
+        // Updating the pointer again on a double/triple click can move the
+        // selection anchor between clicks. This matches Ghostty's macOS host.
+        sendMouse(event, state: GHOSTTY_MOUSE_PRESS, button: GHOSTTY_MOUSE_LEFT, updatePosition: event.clickCount == 1)
+    }
+    public override func mouseUp(with event: NSEvent) { sendMouse(event, state: GHOSTTY_MOUSE_RELEASE, button: GHOSTTY_MOUSE_LEFT, updatePosition: false) }
+    public override func rightMouseDown(with event: NSEvent) { sendMouse(event, state: GHOSTTY_MOUSE_PRESS, button: GHOSTTY_MOUSE_RIGHT, updatePosition: true) }
+    public override func rightMouseUp(with event: NSEvent) { sendMouse(event, state: GHOSTTY_MOUSE_RELEASE, button: GHOSTTY_MOUSE_RIGHT, updatePosition: false) }
+    public override func otherMouseDown(with event: NSEvent) { sendMouse(event, state: GHOSTTY_MOUSE_PRESS, button: mouseButton(event.buttonNumber), updatePosition: true) }
+    public override func otherMouseUp(with event: NSEvent) { sendMouse(event, state: GHOSTTY_MOUSE_RELEASE, button: mouseButton(event.buttonNumber), updatePosition: false) }
     public override func mouseMoved(with event: NSEvent) { sendMousePosition(event) }
     public override func mouseDragged(with event: NSEvent) { sendMousePosition(event) }
     public override func rightMouseDragged(with event: NSEvent) { sendMousePosition(event) }
@@ -522,18 +534,25 @@ public final class TerminalMetalView: NSView, NSTextInputClient {
         text.withCString { ghostty_surface_text(surface, $0, UInt(text.utf8.count)) }
     }
 
-    private func sendMouse(_ event: NSEvent, state: ghostty_input_mouse_state_e, button: ghostty_input_mouse_button_e) {
+    private func sendMouse(
+        _ event: NSEvent,
+        state: ghostty_input_mouse_state_e,
+        button: ghostty_input_mouse_button_e,
+        updatePosition: Bool
+    ) {
         window?.makeFirstResponder(self)
         guard let surface else { return }
-        sendMousePosition(event)
+        if updatePosition { sendMousePosition(event) }
         _ = ghostty_surface_mouse_button(surface, state, button, ghosttyModifiers(event.modifierFlags))
     }
 
     private func sendMousePosition(_ event: NSEvent) {
         guard let surface else { return }
-        let point = convert(event.locationInWindow, from: nil)
-        let backing = convertToBacking(NSRect(origin: point, size: .zero)).origin
-        ghostty_surface_mouse_pos(surface, backing.x, backing.y, ghosttyModifiers(event.modifierFlags))
+        let viewPoint = convert(event.locationInWindow, from: nil)
+        let point = TerminalInputMapping.ghosttyMousePosition(viewPoint: viewPoint, boundsHeight: bounds.height)
+        // Raw out-of-bounds drag positions are intentional: Ghostty uses them
+        // to drive selection auto-scroll beyond the visible viewport.
+        ghostty_surface_mouse_pos(surface, point.x, point.y, ghosttyModifiers(event.modifierFlags))
     }
 
     private func ghosttyKey(_ event: NSEvent, action: ghostty_input_action_e) -> ghostty_input_key_s {

@@ -285,7 +285,7 @@ public enum ReviewBaseline: Hashable, Sendable {
     }
 }
 
-public enum ReviewDisplayMode: String, Codable, CaseIterable, Sendable {
+public enum ReviewDisplayMode: String, Codable, CaseIterable, Hashable, Sendable {
     case unified
     case split
     case fullFile
