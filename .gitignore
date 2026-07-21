@@ -6,3 +6,8 @@ xcuserdata/
 **/__Snapshots__/
 GhosttyKit.xcframework/
 /bazel-*
+dist/
+*.p12
+*.p8
+*.cer
+*.mobileprovision

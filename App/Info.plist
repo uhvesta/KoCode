@@ -2,12 +2,44 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
 	<key>CFBundleDisplayName</key>
+	<string>AvestaCode</string>
+	<key>CFBundleExecutable</key>
 	<string>AvestaCode</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.avestacode.workbench</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>AvestaCode</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>AvestaCode uses automation when you explicitly ask a terminal or review action to interact with another application.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>AvestaCode needs access to workspace repositories that you store on your Desktop.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>AvestaCode needs access to workspace repositories that you store in Documents.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>AvestaCode needs access to repositories and files that you choose from Downloads.</string>
+	<key>NSFileProviderDomainUsageDescription</key>
+	<string>AvestaCode needs access to workspace repositories that you choose in cloud-backed file provider locations.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>AvestaCode needs access to workspace repositories that you choose on network volumes.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSQuitAlwaysKeepsWindows</key>
+	<false/>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>AvestaCode needs access to workspace repositories that you choose on removable volumes.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 AvestaCode</string>
 </dict>
